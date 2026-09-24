@@ -1,30 +1,24 @@
-import { LIVE_MODE, STARTING_CASH, alignUsdPrice, applyPrints, bookNeedsReset, closeOnMarks, emptyBook, resetBook, sanitizeBook, sleeveEquity, sleevesFor, snapshot } from "./paper.js";
+import { LIVE_MODE, STARTING_CASH, alignUsdPrice, emptyBook, sleeveEquity, snapshot } from "./paper.js";
 import { formatCentral } from "./time.js";
 
-const STORAGE_KEY = "paper-copy-v4";
+function dropLocalBooks() {
+  try {
+    const gone = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith("paper-copy")) gone.push(key);
+    }
+    for (const key of gone) localStorage.removeItem(key);
+  } catch { /* private mode */ }
+}
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 const qtyFmt = new Intl.NumberFormat("en-US", { maximumFractionDigits: 4 });
 
-function loadBook() {
-  try {
-    localStorage.removeItem("paper-copy-v1");
-    localStorage.removeItem("paper-copy-v2");
-    localStorage.removeItem("paper-copy-v3");
-  } catch { /* private mode */ }
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-    if (saved && saved.lots && saved.seen) {
-      const book = sanitizeBook(saved);
-      if (book !== saved) saveBook(book);
-      return book;
-    }
-  } catch { /* fresh book */ }
+function bookFrom(feed) {
+  const book = feed?.book;
+  if (book && typeof book.cashUsd === "number" && book.lots && book.seen) return book;
   return emptyBook();
-}
-
-function saveBook(book) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(book));
 }
 
 function cls(n) { return n >= 0 ? "up" : "down"; }
@@ -125,30 +119,14 @@ function render(feed, book) {
   document.querySelector("#foot").textContent = worked.length ? `Live routes: ${[...new Set(worked)].join(" · ")}` : "No upstream route succeeded on the last refresh.";
 }
 
-function pricedPrints(feed) {
-  const prints = [];
-  for (const trader of feed.traders || []) prints.push(...(trader.prints || []));
-  return prints;
+function show(feed) {
+  dropLocalBooks();
+  render(feed, bookFrom(feed));
 }
 
-function absorb(feed, book) {
-  if (bookNeedsReset(book)) resetBook(book);
-  const sleeves = {};
-  for (const trader of feed.traders || []) {
-    if (Number(trader.sleeveUsd) > 0) sleeves[trader.id] = Number(trader.sleeveUsd);
-  }
-  if (!Object.keys(sleeves).length) Object.assign(sleeves, sleevesFor(feed.traders || []));
-  applyPrints(book, pricedPrints(feed), sleeves);
-  closeOnMarks(book, feed.dexMarks || {}, feed.fetchedAt);
-  saveBook(book);
-  render(feed, book);
-}
-
-let book = loadBook();
 async function refresh(fresh) {
   const response = await fetch(fresh ? "/api/feed?fresh=1" : "/api/feed");
-  const feed = await response.json();
-  absorb(feed, book);
+  show(await response.json());
 }
 
 function tick() {
@@ -186,11 +164,12 @@ if (live) {
     : "Live flag refused · no orders";
 }
 
+dropLocalBooks();
 const embedded = window.__FEED__;
-if (embedded && embedded.ok) absorb(embedded, book);
-else refresh(false).catch((error) => render({ ok: false, error: error.message, traders: [], routes: [] }, book));
+if (embedded && embedded.book) show(embedded);
+else refresh(false).catch((error) => show({ ok: false, error: error.message, traders: [], routes: [] }));
 
 document.querySelector("#refresh").addEventListener("click", () => {
-  refresh(true).catch((error) => render({ ok: false, error: error.message, traders: [], routes: [] }, book));
+  refresh(true).catch((error) => show({ ok: false, error: error.message, traders: [], routes: [] }));
 });
 setInterval(() => refresh(false).catch(() => {}), 20_000);

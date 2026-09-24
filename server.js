@@ -2,6 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { loadFeed } from "./lib/feed.js";
+import { settleFeed } from "./lib/settle.js";
 
 const port = Number(process.env.PORT) || 4173;
 const publicDir = path.join(import.meta.dirname, "public");
@@ -21,10 +22,11 @@ const server = http.createServer(async (request, response) => {
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
   if (url.pathname === "/api/feed") {
     try {
-      const body = await loadFeed({
+      const feed = await loadFeed({
         fresh: url.searchParams.has("fresh"),
         fomoKey: process.env.FOMO_API_KEY || "",
       });
+      const body = await settleFeed(feed);
       send(response, 200, JSON.stringify(body), {
         "content-type": "application/json; charset=utf-8",
         "cache-control": "no-store",
@@ -46,7 +48,9 @@ const server = http.createServer(async (request, response) => {
   }
   let body = fs.readFileSync(filePath);
   if (filePath.endsWith("index.html")) {
-    const feed = await loadFeed({ fomoKey: process.env.FOMO_API_KEY || "" }).catch((error) => ({ ok: false, error: error.message || "Feed failed", traders: [], routes: [] }));
+    const feed = await loadFeed({ fomoKey: process.env.FOMO_API_KEY || "" })
+      .then((body) => settleFeed(body))
+      .catch((error) => ({ ok: false, error: error.message || "Feed failed", traders: [], routes: [] }));
     const inline = JSON.stringify(feed).replace(/</g, "\\u003c");
     body = Buffer.from(body.toString("utf8").replace("/*__FEED__*/null", inline));
   }
