@@ -21,7 +21,10 @@ const server = http.createServer(async (request, response) => {
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
   if (url.pathname === "/api/feed") {
     try {
-      const body = await loadFeed({ fresh: url.searchParams.has("fresh") });
+      const body = await loadFeed({
+        fresh: url.searchParams.has("fresh"),
+        fomoKey: process.env.FOMO_API_KEY || "",
+      });
       send(response, 200, JSON.stringify(body), {
         "content-type": "application/json; charset=utf-8",
         "cache-control": "no-store",

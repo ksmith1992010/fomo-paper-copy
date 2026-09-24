@@ -1,4 +1,4 @@
-const STORAGE_KEY = "paper-copy-v1";
+const STORAGE_KEY = "paper-copy-v2";
 const STARTING_CASH = 10_000;
 const SLICE_USD = STARTING_CASH / 3;
 const DUST_USD = 25;
@@ -128,11 +128,11 @@ function render(feed, book) {
   document.querySelector("#traders").innerHTML = traders.length ? traders.map((trader) => `
     <article class="card">
       <div class="rank">#${trader.rank} ${trader.name}</div>
-      <p>${money.format(trader.volumeUsd)} taped · ${trader.tradeCount} prints</p>
+      <p>${trader.pnlUsd ? money.format(trader.pnlUsd) + " PnL · " : ""}${money.format(trader.volumeUsd)} volume</p>
       <ul class="activity">${(trader.recent || []).map((row) => `<li><span class="${row.side === "sell" ? "down" : "up"}">${row.side} ${row.symbol}</span><span>${money.format(row.usd)}</span></li>`).join("")}</ul>
     </article>`).join("") : `<p class="empty">No traders on this tape.</p>`;
   document.querySelector("#trades").innerHTML = view.trades.length ? `<table><thead><tr><th>Side</th><th>Token</th><th>From</th><th>Paper</th><th>P&L</th></tr></thead><tbody>
-    ${view.trades.slice(0, 40).map((trade) => `<tr><td class="${trade.side === "sell" ? "down" : "up"}">${trade.side}</td><td>${trade.symbol}</td><td>${String(trade.traderId).slice(0, 4)}…</td><td>${money.format(trade.usd)}</td><td class="${cls(trade.realizedUsd || 0)}">${trade.side === "sell" ? money.format(trade.realizedUsd || 0) : ""}</td></tr>`).join("")}
+    ${view.trades.slice(0, 40).map((trade) => `<tr><td class="${trade.side === "sell" ? "down" : "up"}">${trade.side}</td><td>${trade.symbol}</td><td>${trade.traderName || String(trade.traderId).slice(0, 8)}</td><td>${money.format(trade.usd)}</td><td class="${cls(trade.realizedUsd || 0)}">${trade.side === "sell" ? money.format(trade.realizedUsd || 0) : ""}</td></tr>`).join("")}
   </tbody></table>` : `<p class="empty">No mirrored trades yet.</p>`;
   document.querySelector("#positions").innerHTML = view.positions.length ? `<table><thead><tr><th>Token</th><th>Qty</th><th>Value</th><th>Unrealized</th></tr></thead><tbody>
     ${view.positions.map((row) => `<tr><td>${row.symbol}</td><td>${qtyFmt.format(row.qty)}</td><td>${money.format(row.valueUsd)}</td><td class="${cls(row.unrealizedUsd)}">${money.format(row.unrealizedUsd)}</td></tr>`).join("")}
