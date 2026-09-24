@@ -89,9 +89,10 @@ main {
   min-width: 0;
 }
 
-.mark {
-  width: 76px;
-  height: 76px;
+.lockup {
+  height: 84px;
+  width: auto;
+  max-width: min(420px, 70vw);
   flex: 0 0 auto;
   object-fit: contain;
 }
@@ -140,15 +141,6 @@ main {
   font-weight: 600;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-}
-
-h1 {
-  margin: 2px 0 4px;
-  font-size: 28px;
-  font-weight: 560;
-  font-variant-caps: all-small-caps;
-  letter-spacing: 0.34em;
-  text-shadow: 0 0 18px rgba(0, 229, 255, 0.45);
 }
 
 #source, .book, #clock, p { margin: 0; color: var(--muted); font-size: 12px; }
@@ -310,10 +302,9 @@ footer { color: var(--muted); font-size: 11px; word-break: break-word; }
 @media (max-width: 800px) {
   .deck { grid-template-columns: 1fr; }
   .header-meta { justify-content: space-between; }
-  .mark { width: 58px; height: 58px; }
+  .lockup { height: 64px; max-width: 100%; }
   .stats { grid-template-columns: 1fr 1fr; }
   .grid { grid-template-columns: 1fr; }
-  h1 { font-size: 22px; letter-spacing: 0.22em; }
   .reactor { width: 44px; height: 44px; }
   .core { inset: 15px; }
   .stats strong, .handle { font-size: 16px; }
