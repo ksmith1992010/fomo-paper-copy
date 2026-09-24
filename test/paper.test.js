@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  LIVE_MODE,
   STARTING_CASH,
   alignUsdPrice,
   applyPrint,
@@ -8,6 +9,7 @@ import {
   bookNeedsReset,
   closeOnMarks,
   emptyBook,
+  liveStatus,
   sanitizeBook,
   sleeveSizes,
   snapshot,
@@ -318,4 +320,74 @@ test("a book saved before the mark fix resets to $1,000 and no positions", () =>
   assert.equal(cleared.bookVersion, 4);
   assert.deepEqual(cleared.lots, {});
   assert.equal(cleared.trades.length, 0);
+});
+
+test("live mode stays off and cannot name an order route", () => {
+  assert.equal(LIVE_MODE, false);
+  const status = liveStatus();
+  assert.equal(status.enabled, false);
+  assert.equal(status.armed, false);
+  assert.equal(status.orders, "disabled");
+  assert.equal(status.account, "sandbox");
+  assert.equal(status.separateFromMainWallet, true);
+});
+
+test("each copy is one ledger line and a skipped sell adds nothing", () => {
+  const book = emptyBook();
+  const sleeves = { ada: 250, bob: 250 };
+  applyPrint(book, {
+    id: "buy",
+    ts: "2026-09-24T00:00:00Z",
+    traderId: "ada",
+    side: "buy",
+    mint: "Mint111",
+    symbol: "AAA",
+    usd: 80_000,
+    priceUsd: 10,
+  }, sleeves);
+  assert.equal(book.ledger.length, 1);
+  assert.equal(book.ledger[0].why, "8% of the sleeve still unused");
+  assert.equal(book.ledger[0].entryUsd, 10);
+  assert.equal(book.ledger[0].exitUsd, null);
+  assert.equal(book.ledger[0].outcome, "opened");
+  assert.ok(Math.abs(book.ledger[0].usd - 20) < 1e-9);
+
+  const cash = book.cashUsd;
+  const skipped = applyPrint(book, {
+    id: "bob-sell",
+    ts: "2026-09-24T00:01:00Z",
+    traderId: "bob",
+    side: "sell",
+    mint: "Mint111",
+    symbol: "AAA",
+    usd: 90_000,
+    priceUsd: 40,
+  }, sleeves);
+  assert.equal(skipped.status, "flat");
+  assert.equal(book.cashUsd, cash);
+  assert.equal(book.trades.filter((trade) => trade.side === "sell").length, 0);
+  assert.equal(book.ledger.at(-1).outcome, "skipped");
+  assert.equal(book.ledger.at(-1).why, "No open lot for this trader");
+  assert.equal(book.ledger.at(-1).realizedUsd, 0);
+  assert.equal(book.ledger.at(-1).usd, 0);
+
+  const closed = applyPrint(book, {
+    id: "ada-sell",
+    ts: "2026-09-24T00:02:00Z",
+    traderId: "ada",
+    side: "sell",
+    mint: "Mint111",
+    symbol: "AAA",
+    priceUsd: 12,
+    closeQty: 10_000,
+  }, sleeves);
+  assert.equal(closed.status, "sell");
+  const line = book.ledger.at(-1);
+  assert.equal(line.outcome, "closed");
+  assert.equal(line.entryUsd, 10);
+  assert.equal(line.exitUsd, 12);
+  assert.ok(line.realizedUsd > 0);
+  assert.equal(book.ledger.filter((row) => row.id === "ada-sell").length, 1);
+  assert.equal(book.lots["ada|Mint111"], undefined);
+  assert.ok(book.cashUsd > cash);
 });

@@ -1,4 +1,4 @@
-import { STARTING_CASH, applyPrints, bookNeedsReset, closeOnMarks, emptyBook, resetBook, sanitizeBook, sleevesFor, snapshot } from "./paper.js";
+import { LIVE_MODE, STARTING_CASH, applyPrints, bookNeedsReset, closeOnMarks, emptyBook, resetBook, sanitizeBook, sleevesFor, snapshot } from "./paper.js";
 
 const STORAGE_KEY = "paper-copy-v4";
 
@@ -36,11 +36,11 @@ function esc(value) {
   return String(value ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
 }
 
-function reasonLabel(reason) {
-  if (reason === "target") return "target";
-  if (reason === "stop") return "stop";
-  if (reason === "sell") return "fomo";
-  return "";
+function priceFmt(value) {
+  const n = Number(value);
+  if (!(n > 0)) return "—";
+  const digits = n >= 1 ? 2 : n >= 0.01 ? 4 : 6;
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: digits, minimumFractionDigits: 2 }).format(n);
 }
 
 function gauge(usd) {
@@ -76,10 +76,11 @@ function render(feed, book) {
       <ul class="activity">${(trader.recent || []).map((row) => `<li><span class="${row.side === "sell" ? "down" : "up"}">${esc(row.side)} ${esc(row.symbol)}</span><span>${money.format(row.usd)}</span></li>`).join("")}</ul>
     </article>`;
   }).join("") : `<p class="empty">No traders on this board.</p>`;
-  document.querySelector("#trades").innerHTML = view.trades.length ? `<table><thead><tr><th>Side</th><th>Token</th><th>From</th><th>Paper</th><th>P&L</th></tr></thead><tbody>
-    ${view.trades.slice(0, 40).map((trade) => {
-      const tag = reasonLabel(trade.reason);
-      return `<tr><td class="${trade.side === "sell" ? "down" : "up"}">${esc(trade.side)}${tag ? ` <em>${esc(tag)}</em>` : ""}</td><td>${esc(trade.symbol)}</td><td>${esc(trade.traderName || String(trade.traderId).slice(0, 8))}</td><td>${money.format(trade.usd)}</td><td class="${cls(trade.realizedUsd || 0)}">${trade.side === "sell" ? money.format(trade.realizedUsd || 0) : ""}</td></tr>`;
+  const ledger = [...(book.ledger || [])].reverse();
+  document.querySelector("#trades").innerHTML = ledger.length ? `<table><thead><tr><th>Why</th><th>Token</th><th>Entry</th><th>Exit</th><th>Outcome</th></tr></thead><tbody>
+    ${ledger.slice(0, 40).map((line) => {
+      const outcome = line.outcome === "closed" ? `closed ${money.format(shown(line.realizedUsd))}` : line.outcome;
+      return `<tr><td>${esc(line.why)}</td><td>${esc(line.symbol)}</td><td>${priceFmt(line.entryUsd)}</td><td>${priceFmt(line.exitUsd)}</td><td class="${cls(line.realizedUsd || 0)}">${esc(outcome)}</td></tr>`;
     }).join("")}
   </tbody></table>` : `<p class="empty">No mirrored trades yet.</p>`;
   document.querySelector("#positions").innerHTML = view.positions.length ? `<table><thead><tr><th>Token</th><th>Qty</th><th>Value</th><th>Unrealized</th></tr></thead><tbody>
@@ -121,6 +122,13 @@ function tick() {
 }
 tick();
 setInterval(tick, 1000);
+
+const live = document.querySelector("#live");
+if (live) {
+  live.textContent = LIVE_MODE === false
+    ? "Live off · no orders · sandbox separate from any main wallet"
+    : "Live flag refused · no orders";
+}
 
 const embedded = window.__FEED__;
 if (embedded && embedded.ok) absorb(embedded, book);

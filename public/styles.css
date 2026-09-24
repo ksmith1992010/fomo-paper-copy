@@ -153,6 +153,7 @@ h1 {
 
 #source, .book, #clock, p { margin: 0; color: var(--muted); font-size: 12px; }
 .book { margin-top: 2px; color: #9fd8e8; }
+.live-off { margin-top: 4px; color: var(--amber); letter-spacing: 0.08em; text-transform: uppercase; font-size: 11px; }
 
 .header-meta {
   display: flex;

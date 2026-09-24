@@ -31,3 +31,5 @@ Traders are keyed by `userId`. Each trade row becomes a buy when it has a bought
 - A copied buy is filled at that print's USD price per whole token. Open lots are then marked at the latest DexScreener price in the same unit. A DexScreener quote that is off by a power of ten (a raw price that skipped decimals) is scaled back before it is used. Leader PnL and volume are never used as a token price.
 - P&L is equity minus $1,000. Equity is cash plus open lots at that mark. Unrealized P&L is (mark − entry) times quantity on open lots only.
 - A saved book from before this mark fix is dropped and replaced with $1,000 and no positions.
+- Live mode is a constant off switch. The page has no wallet connect, no exchange key, and no order route. A later arm would be a sandbox account separate from any main wallet.
+- Each copy writes one ledger line: why it fired, the entry, the exit, and the outcome. A skipped sell is a line with no cash change. Size stays 8% of the remaining sleeve, never the leader's full print.

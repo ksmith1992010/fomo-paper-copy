@@ -1,5 +1,17 @@
 export const BOOK_VERSION = 4;
 export const STARTING_CASH = 1_000;
+/** Disarmed. There is no setter and no order route. A later arm would be a sandbox account, never a main wallet. */
+export const LIVE_MODE = false;
+
+export function liveStatus() {
+  return {
+    enabled: false,
+    armed: false,
+    orders: "disabled",
+    account: "sandbox",
+    separateFromMainWallet: true,
+  };
+}
 export const SLEEVE_FLOOR = 0.15;
 export const SLEEVE_CAP = 0.5;
 export const BUY_FRACTION = 0.08;
@@ -15,6 +27,7 @@ export function emptyBook() {
     lots: {},
     seen: {},
     trades: [],
+    ledger: [],
   };
 }
 
@@ -148,7 +161,52 @@ function closeHeld(book, key, price, print, onlyLots) {
     reason: print.reason || "sell",
   };
   book.trades.push(trade);
+  pushLedger(book, {
+    id: trade.id,
+    ts: trade.ts,
+    traderId: trade.traderId,
+    traderName: trade.traderName,
+    mint: trade.mint,
+    symbol: trade.symbol,
+    side: "sell",
+    why: whyFor(print.reason || "sell"),
+    entryUsd: filled > 0 ? cost / filled : null,
+    exitUsd: Number(price),
+    outcome: "closed",
+    realizedUsd: trade.realizedUsd,
+    usd: proceeds,
+  });
   return trade;
+}
+
+function whyFor(reason) {
+  if (reason === "target") return "DexScreener mark is 20% above entry";
+  if (reason === "stop") return "DexScreener mark is 15% below entry";
+  return "Leader sold a coin this sleeve holds";
+}
+
+function pushLedger(book, line) {
+  if (!Array.isArray(book.ledger)) book.ledger = [];
+  book.ledger.push(line);
+}
+
+function ledgerFromTrade(trade) {
+  const sell = trade.side === "sell";
+  return {
+    id: trade.id,
+    ts: trade.ts,
+    traderId: trade.traderId,
+    traderName: trade.traderName,
+    mint: trade.mint,
+    symbol: trade.symbol,
+    side: trade.side,
+    why: sell ? whyFor(trade.reason || "sell") : "8% of the sleeve still unused",
+    entryUsd: sell ? (Number(trade.entryUsd) > 0 ? Number(trade.entryUsd) : null) : Number(trade.priceUsd) || null,
+    exitUsd: sell ? Number(trade.priceUsd) || null : null,
+    outcome: sell ? "closed" : "opened",
+    realizedUsd: Number(trade.realizedUsd) || 0,
+    usd: Number(trade.usd) || 0,
+  };
 }
 
 export function applyPrint(book, print, sleeves) {
@@ -158,6 +216,21 @@ export function applyPrint(book, print, sleeves) {
   const key = lotKey(print.traderId, print.mint);
   if (!(price > 0) || !print.mint) {
     book.seen[id] = "skip";
+    pushLedger(book, {
+      id,
+      ts: print.ts,
+      traderId: print.traderId,
+      traderName: print.traderName,
+      mint: print.mint,
+      symbol: print.symbol,
+      side: print.side === "sell" ? "sell" : "buy",
+      why: "Print has no token price",
+      entryUsd: null,
+      exitUsd: null,
+      outcome: "skipped",
+      realizedUsd: 0,
+      usd: 0,
+    });
     return { book, status: "skip" };
   }
 
@@ -168,6 +241,21 @@ export function applyPrint(book, print, sleeves) {
     const buyUsd = Math.min(slice, cash, remaining);
     if (!(buyUsd >= MIN_BUY_USD) || book.cashUsd - buyUsd < -1e-9) {
       book.seen[id] = "small";
+      pushLedger(book, {
+        id,
+        ts: print.ts,
+        traderId: print.traderId,
+        traderName: print.traderName,
+        mint: print.mint,
+        symbol: print.symbol,
+        side: "buy",
+        why: slice < MIN_BUY_USD || remaining < MIN_BUY_USD ? "Sleeve slice is under $5" : "Sleeve is spent or cash is short",
+        entryUsd: null,
+        exitUsd: null,
+        outcome: "skipped",
+        realizedUsd: 0,
+        usd: 0,
+      });
       return { book, status: "small" };
     }
     const qty = buyUsd / price;
@@ -189,11 +277,43 @@ export function applyPrint(book, print, sleeves) {
       priceUsd: price,
       realizedUsd: 0,
     });
+    pushLedger(book, {
+      id,
+      ts: print.ts,
+      traderId: print.traderId,
+      traderName: print.traderName,
+      mint: print.mint,
+      symbol: print.symbol,
+      side: "buy",
+      why: "8% of the sleeve still unused",
+      entryUsd: price,
+      exitUsd: null,
+      outcome: "opened",
+      realizedUsd: 0,
+      usd: buyUsd,
+    });
     return { book, status: "buy" };
   }
 
   const closed = closeHeld(book, key, price, { ...print, reason: "sell" });
   book.seen[id] = closed ? "sell" : "flat";
+  if (!closed) {
+    pushLedger(book, {
+      id,
+      ts: print.ts,
+      traderId: print.traderId,
+      traderName: print.traderName,
+      mint: print.mint,
+      symbol: print.symbol,
+      side: "sell",
+      why: "No open lot for this trader",
+      entryUsd: null,
+      exitUsd: null,
+      outcome: "skipped",
+      realizedUsd: 0,
+      usd: 0,
+    });
+  }
   return { book, status: closed ? "sell" : "flat" };
 }
 
@@ -246,6 +366,7 @@ function copyBook(book, next) {
   book.lots = next.lots;
   book.seen = next.seen;
   book.trades = next.trades;
+  book.ledger = next.ledger;
   return book;
 }
 
@@ -286,6 +407,7 @@ export function resetBook(book) {
 
 export function sanitizeBook(saved) {
   if (!saved || bookNeedsReset(saved)) return emptyBook();
+  if (!Array.isArray(saved.ledger)) saved.ledger = (saved.trades || []).map(ledgerFromTrade);
   return saved;
 }
 
