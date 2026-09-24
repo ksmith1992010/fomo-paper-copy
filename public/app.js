@@ -54,8 +54,9 @@ function render(feed, book) {
   const sleeves = sleevesFor(traders);
   document.querySelector("#source").textContent = feed.source || "No source";
   const banner = document.querySelector("#banner");
-  banner.className = feed.ok ? "" : "banner";
-  banner.textContent = feed.ok ? "" : (feed.error || "The upstream feed is unavailable.");
+  const note = feed.banner || (feed.ok ? "" : (feed.error || "The upstream feed is unavailable."));
+  banner.className = note ? "banner" : "";
+  banner.textContent = note;
   document.querySelector("#stats").innerHTML = `
     <div class="frame"><span>Cash</span><strong>${money.format(shown(view.cashUsd))}</strong></div>
     <div class="frame"><span>Equity</span><strong>${money.format(shown(view.equityUsd))}</strong></div>

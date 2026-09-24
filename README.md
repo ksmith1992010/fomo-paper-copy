@@ -21,6 +21,8 @@ The top 3 are FOMO's own 24h leaderboard. Set `FOMO_API_KEY` in the environment.
 
 Traders are keyed by `userId`. Each trade row becomes a buy when it has a bought amount and entry price, and a sell when it has a sold amount and exit price. Marks come from `GET https://api.dexscreener.com/latest/dex/tokens/{mints}`. If DexScreener has no price, an open lot stays marked at its entry, so unrealized P&L is zero. The +20% and −15% exits use the DexScreener mark only, after a power-of-ten decimal miss is scaled back onto the entry. The browser talks only to `/api/feed`.
 
+If the leaderboard returns 402 or does not answer, the desk keeps the last saved top 3 (handle, userId, and Solana wallet when FOMO sent one) and follows those wallets from public Solana transactions. DexScreener still supplies the mark. The page says that board is a snapshot, not a live leaderboard. With no saved snapshot, the board stays empty and says so. Traders are not invented.
+
 ## Paper rules
 
 - Start with $1,000 of paper cash. The book lives in the browser under `paper-copy-v4`, so an older book is not reused.

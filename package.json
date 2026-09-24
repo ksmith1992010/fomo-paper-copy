@@ -6,5 +6,8 @@
     "dev": "node server.js",
     "start": "node server.js",
     "test": "node --test"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^11.1.1"
   }
 }
