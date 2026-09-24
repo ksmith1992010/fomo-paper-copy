@@ -23,6 +23,12 @@ test("a saved board keeps handle, user id, and a Solana wallet", () => {
   assert.equal(snapshot.traders[0].handle, "pointfarmcap");
   assert.equal(snapshot.traders[0].userId, USER);
   assert.equal(snapshot.traders[0].wallet, WALLET);
+  const nested = snapshotFromBoard([{
+    userId: "c39caec4-ae30-5388-ba86-c4c10b5f2d42",
+    handle: "AviFelman",
+    wallets: { solana: "BA3nKHc4DoSANRrx4FcCupExzs6cWzw1wkPpqjnqJaCN" },
+  }]);
+  assert.equal(nested.traders[0].wallet, "BA3nKHc4DoSANRrx4FcCupExzs6cWzw1wkPpqjnqJaCN");
   assert.match(snapshotBanner(402, null), /no saved snapshot/);
   assert.match(snapshotBanner(402, snapshot), /last FOMO snapshot/);
   assert.doesNotMatch(snapshotBanner(402, snapshot), /invented/);
