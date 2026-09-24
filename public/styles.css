@@ -302,6 +302,14 @@ button.ca:hover { background: rgba(0, 229, 255, 0.12); }
   border-top: 1px solid rgba(0, 229, 255, 0.14);
   font-size: 12px;
 }
+.sleeve-history {
+  height: 168px;
+  overflow-y: auto;
+  margin-top: 8px;
+  border-top: 1px solid rgba(0, 229, 255, 0.2);
+}
+.sleeve-history table { min-width: 0; font-size: 11px; }
+.sleeve-history th, .sleeve-history td { padding: 4px 3px; }
 
 h2 { margin: 0 0 8px; }
 .panel { overflow-x: auto; margin-bottom: 16px; }

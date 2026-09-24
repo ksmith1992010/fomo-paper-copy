@@ -28,8 +28,40 @@ export function emptyBook() {
     seen: {},
     trades: [],
     ledger: [],
+    history: {},
     sleeveCash: null,
   };
+}
+
+const WALLET_HISTORY_CAP = 50;
+
+function historyRow(line) {
+  return {
+    ts: line.ts || "",
+    side: line.side === "sell" ? "sell" : "buy",
+    symbol: line.symbol || "",
+    usd: Number(line.usd) || 0,
+    outcome: line.outcome || "",
+    realizedUsd: Number(line.realizedUsd) || 0,
+  };
+}
+
+function rememberHistory(book, line) {
+  const id = String(line?.traderId || "");
+  if (!id) return;
+  if (!book.history || typeof book.history !== "object" || Array.isArray(book.history)) book.history = {};
+  if (!Array.isArray(book.history[id])) book.history[id] = [];
+  book.history[id].push(historyRow(line));
+  if (book.history[id].length > WALLET_HISTORY_CAP) book.history[id] = book.history[id].slice(-WALLET_HISTORY_CAP);
+}
+
+/** Keep the newest 50 buy/sell rows for each sleeve. Does not touch cash or lots. */
+export function ensureWalletHistory(book) {
+  if (!book.history || typeof book.history !== "object" || Array.isArray(book.history)) {
+    book.history = {};
+    for (const line of book.ledger || []) rememberHistory(book, line);
+  }
+  return book.history;
 }
 
 /** Dex quote in whole-token dollars. A price off by 10^decimals is scaled back onto the human price. */
@@ -224,6 +256,7 @@ export function sleeveEquity(book, traderId, marks) {
 function pushLedger(book, line) {
   if (!Array.isArray(book.ledger)) book.ledger = [];
   book.ledger.push(line);
+  rememberHistory(book, line);
 }
 
 function ledgerFromTrade(trade) {
@@ -407,6 +440,7 @@ function copyBook(book, next) {
   book.seen = next.seen;
   book.trades = next.trades;
   book.ledger = next.ledger;
+  book.history = next.history || {};
   book.sleeveCash = next.sleeveCash || null;
   return book;
 }
@@ -449,6 +483,7 @@ export function resetBook(book) {
 export function sanitizeBook(saved) {
   if (!saved || bookNeedsReset(saved)) return emptyBook();
   if (!Array.isArray(saved.ledger)) saved.ledger = (saved.trades || []).map(ledgerFromTrade);
+  ensureWalletHistory(saved);
   return saved;
 }
 

@@ -16,6 +16,7 @@ import {
   ensureSleeveCash,
   sleeveEquity,
   positions,
+  ensureWalletHistory,
 } from "../lib/paper.js";
 
 test("sleeves stay inside 15–50% and sum to the book", () => {
@@ -516,4 +517,26 @@ test("seeding sleeve cash keeps open lots and does not reset the book", () => {
   const equity = sleeveEquity(book, "a", {});
   assert.ok(Math.abs(equity - 400) < 1e-9);
   assert.equal(book.ledger.length, 0);
+});
+
+test("each sleeve history keeps the newest 50 rows and does not clear the book", () => {
+  const book = emptyBook();
+  book.cashUsd = 800;
+  book.ledger = Array.from({ length: 60 }, (_, index) => ({
+    traderId: "ada",
+    ts: `2026-09-24T00:${String(index).padStart(2, "0")}:00Z`,
+    side: index % 2 ? "sell" : "buy",
+    symbol: `T${index}`,
+    usd: index + 1,
+    outcome: index % 2 ? "closed" : "opened",
+    realizedUsd: 0,
+  }));
+  delete book.history;
+  ensureWalletHistory(book);
+  assert.equal(book.cashUsd, 800);
+  assert.equal(book.ledger.length, 60);
+  assert.equal(book.history.ada.length, 50);
+  assert.equal(book.history.ada[0].symbol, "T10");
+  assert.equal(book.history.ada.at(-1).symbol, "T59");
+  assert.equal(book.lots && Object.keys(book.lots).length, 0);
 });

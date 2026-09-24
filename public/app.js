@@ -87,6 +87,19 @@ function liveVsEntry(line, marks) {
   return (mark - entry) * qty;
 }
 
+function historyOutcome(row) {
+  if (row.outcome === "closed") return `closed ${money.format(shown(row.realizedUsd))}`;
+  return row.outcome || "";
+}
+
+function sleeveHistory(book, traderId) {
+  const rows = [...(book.history?.[traderId] || [])].reverse();
+  const body = rows.length
+    ? rows.map((row) => `<tr><td class="when">${esc(formatCentral(row.ts))}</td><td class="${row.side === "sell" ? "down" : "up"}">${esc(row.side)}</td><td>${esc(row.symbol)}</td><td>${money.format(shown(row.usd))}</td><td>${esc(historyOutcome(row))}</td></tr>`).join("")
+    : `<tr><td colspan="5" class="empty">No sleeve fills yet.</td></tr>`;
+  return `<div class="sleeve-history"><table><thead><tr><th>Time</th><th>Side</th><th>Ticker</th><th>USD</th><th>Outcome</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
 function render(feed, book) {
   const view = snapshot(book, feed.dexMarks || {});
   const traders = feed.traders || [];
@@ -113,6 +126,7 @@ function render(feed, book) {
         ${gauge(equity)}
       </div>
       <ul class="activity">${(trader.recent || []).map((row) => `<li><span class="${row.side === "sell" ? "down" : "up"}">${esc(row.side)} ${esc(row.symbol)}</span><span>${money.format(row.usd)}</span></li>`).join("")}</ul>
+      ${sleeveHistory(book, trader.id)}
     </article>`;
   }).join("") : `<p class="empty">No traders on this board.</p>`;
   const images = feed.tokenImages || {};
