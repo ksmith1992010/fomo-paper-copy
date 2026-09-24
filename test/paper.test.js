@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   STARTING_CASH,
+  alignUsdPrice,
   applyPrint,
   applyPrints,
   bookNeedsReset,
@@ -260,4 +261,61 @@ test("open P&L is equity minus $1,000 and is unrealized until a close", () => {
   assert.ok(up.pnlUsd > 0);
   assert.equal(up.realizedUsd, 0);
   assert.ok(Math.abs(up.pnlUsd - (up.equityUsd - 1_000)) < 1e-6);
+  const qty = book.lots["wallet|Mint111"][0].qty;
+  assert.ok(Math.abs(up.unrealizedUsd - (15 - 10) * qty) < 1e-6);
+  assert.ok(Math.abs(up.positions[0].unrealizedUsd - up.unrealizedUsd) < 1e-6);
+});
+
+test("a DexScreener quote off by 10^decimals is scaled onto the human price", () => {
+  const human = 0.003781;
+  const aligned = alignUsdPrice(human * 1e6, human);
+  assert.ok(Math.abs(aligned - human) / human < 1e-9);
+  const moved = alignUsdPrice(human * 3.7, human);
+  assert.ok(Math.abs(moved - human * 3.7) < 1e-12);
+  assert.equal(alignUsdPrice(0, human), human);
+});
+
+test("a decimal-shifted mark does not invent P&L, and a real move does", () => {
+  const book = emptyBook();
+  const entry = 0.003781;
+  applyPrint(book, {
+    id: "buy",
+    ts: "2026-09-24T00:00:00Z",
+    traderId: "wallet",
+    side: "buy",
+    mint: "Mint111",
+    symbol: "AAA",
+    priceUsd: entry,
+  }, { wallet: 250 });
+  const qty = book.lots["wallet|Mint111"][0].qty;
+  const cash = book.cashUsd;
+  const flat = snapshot(book, { Mint111: entry * 1e6 });
+  assert.ok(Math.abs(flat.unrealizedUsd) < 1e-6);
+  assert.ok(Math.abs(flat.pnlUsd) < 1e-6);
+  assert.equal(closeOnMarks(book, { Mint111: entry * 1e6 }, "2026-09-24T00:01:00Z").length, 0);
+  assert.equal(book.cashUsd, cash);
+
+  const marked = snapshot(book, { Mint111: entry * 1.1 });
+  assert.ok(Math.abs(marked.unrealizedUsd - (entry * 1.1 - entry) * qty) < 1e-6);
+  assert.equal(marked.realizedUsd, 0);
+
+  const closed = closeOnMarks(book, { Mint111: entry * 1.25 * 1e9 }, "2026-09-24T00:02:00Z");
+  assert.equal(closed.length, 1);
+  assert.ok(Math.abs(closed[0].priceUsd - entry * 1.25) / entry < 1e-6);
+  assert.ok(Math.abs(closed[0].realizedUsd - 20 * 0.25) < 1e-6);
+  assert.ok(book.cashUsd < 2_000);
+  assert.equal(book.lots["wallet|Mint111"], undefined);
+});
+
+test("a book saved before the mark fix resets to $1,000 and no positions", () => {
+  const stale = emptyBook();
+  delete stale.bookVersion;
+  stale.cashUsd = 835;
+  stale.lots = { "ada|Mint111": [{ qty: 10, costUsd: 40, entryUsd: 4, symbol: "AAA" }] };
+  assert.equal(bookNeedsReset(stale), true);
+  const cleared = sanitizeBook(stale);
+  assert.equal(cleared.cashUsd, 1_000);
+  assert.equal(cleared.bookVersion, 4);
+  assert.deepEqual(cleared.lots, {});
+  assert.equal(cleared.trades.length, 0);
 });

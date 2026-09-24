@@ -1,3 +1,4 @@
+export const BOOK_VERSION = 4;
 export const STARTING_CASH = 1_000;
 export const SLEEVE_FLOOR = 0.15;
 export const SLEEVE_CAP = 0.5;
@@ -8,12 +9,29 @@ export const STOP_LOSS = 0.15;
 
 export function emptyBook() {
   return {
+    bookVersion: BOOK_VERSION,
     cashUsd: STARTING_CASH,
     startingUsd: STARTING_CASH,
     lots: {},
     seen: {},
     trades: [],
   };
+}
+
+/** Dex quote in whole-token dollars. A price off by 10^decimals is scaled back onto the human price. */
+export function alignUsdPrice(quote, human) {
+  const dex = Number(quote);
+  const basis = Number(human);
+  if (!(dex > 0)) return basis > 0 ? basis : 0;
+  if (!(basis > 0)) return dex;
+  const ratio = dex / basis;
+  if (!(ratio > 0)) return dex;
+  const exp = Math.round(Math.log10(ratio));
+  if (Math.abs(exp) < 6) return dex;
+  const scaled = dex / 10 ** exp;
+  const check = scaled / basis;
+  if (check >= 0.25 && check <= 4) return scaled;
+  return dex;
 }
 
 function lotKey(traderId, mint) {
@@ -194,10 +212,18 @@ export function closeOnMarks(book, dexMarks, ts) {
   const closed = [];
   for (const [key, lots] of Object.entries({ ...book.lots })) {
     const [traderId, mint] = key.split("|");
-    const mark = Number(dexMarks?.[mint]);
+    const raw = Number(dexMarks?.[mint]);
     const open = positiveLots(lots);
-    if (!(mark > 0) || !open.length) continue;
-    const hit = open.filter((lot) => mark >= lot.entryUsd * (1 + TAKE_PROFIT) || mark <= lot.entryUsd * (1 - STOP_LOSS));
+    if (!(raw > 0) || !open.length) continue;
+    const qty = open.reduce((sum, lot) => sum + Number(lot.qty), 0);
+    const cost = open.reduce((sum, lot) => sum + Number(lot.costUsd), 0);
+    const basis = qty > 0 ? cost / qty : 0;
+    const mark = alignUsdPrice(raw, basis);
+    if (!(mark > 0)) continue;
+    const hit = open.filter((lot) => {
+      const entry = Number(lot.entryUsd) > 0 ? Number(lot.entryUsd) : basis;
+      return mark >= entry * (1 + TAKE_PROFIT) || mark <= entry * (1 - STOP_LOSS);
+    });
     if (!hit.length) continue;
     const reason = mark >= hit[0].entryUsd * (1 + TAKE_PROFIT) ? "target" : "stop";
     const trade = closeHeld(book, key, mark, {
@@ -214,6 +240,7 @@ export function closeOnMarks(book, dexMarks, ts) {
 }
 
 function copyBook(book, next) {
+  book.bookVersion = next.bookVersion;
   book.cashUsd = next.cashUsd;
   book.startingUsd = next.startingUsd;
   book.lots = next.lots;
@@ -225,7 +252,7 @@ function copyBook(book, next) {
 /** A phantom sell or a negative balance means the saved book cannot be trusted. */
 export function bookNeedsReset(book) {
   if (!book || typeof book.cashUsd !== "number" || book.cashUsd < -1e-6) return true;
-  if (book.startingUsd !== STARTING_CASH) return true;
+  if (book.bookVersion !== BOOK_VERSION || book.startingUsd !== STARTING_CASH) return true;
   for (const lots of Object.values(book.lots || {})) {
     for (const lot of lots || []) {
       if (!(Number(lot.qty) > 0) || Number(lot.costUsd) < 0) return true;
@@ -269,8 +296,14 @@ export function positions(book, marks) {
     const qty = lots.reduce((sum, lot) => sum + lot.qty, 0);
     const costUsd = lots.reduce((sum, lot) => sum + lot.costUsd, 0);
     if (qty <= 1e-10) continue;
-    const mark = Number(marks?.[mint]) > 0 ? Number(marks[mint]) : costUsd / qty;
-    const valueUsd = qty * mark;
+    const entry = costUsd / qty;
+    const quoted = Number(marks?.[mint]);
+    const mark = quoted > 0 ? alignUsdPrice(quoted, entry) : entry;
+    const unrealizedUsd = lots.reduce((sum, lot) => {
+      const lotEntry = Number(lot.entryUsd) > 0 ? Number(lot.entryUsd) : entry;
+      return sum + (mark - lotEntry) * Number(lot.qty);
+    }, 0);
+    const valueUsd = costUsd + unrealizedUsd;
     rows.push({
       traderId,
       mint,
@@ -279,7 +312,7 @@ export function positions(book, marks) {
       costUsd,
       markUsd: mark,
       valueUsd,
-      unrealizedUsd: valueUsd - costUsd,
+      unrealizedUsd,
     });
   }
   rows.sort((a, b) => b.valueUsd - a.valueUsd);
@@ -290,15 +323,16 @@ export function snapshot(book, marks) {
   const open = positions(book, marks);
   const valueUsd = open.reduce((sum, row) => sum + row.valueUsd, 0);
   const realizedUsd = book.trades.reduce((sum, trade) => sum + (trade.realizedUsd || 0), 0);
-  const equityUsd = book.cashUsd + valueUsd;
+  const equityUsd = Math.max(0, book.cashUsd) + valueUsd;
+  const pnlUsd = equityUsd - book.startingUsd;
   return {
-    cashUsd: book.cashUsd,
+    cashUsd: Math.max(0, book.cashUsd),
     startingUsd: book.startingUsd,
     equityUsd,
     valueUsd,
     realizedUsd,
-    unrealizedUsd: valueUsd - open.reduce((sum, row) => sum + row.costUsd, 0),
-    pnlUsd: equityUsd - book.startingUsd,
+    unrealizedUsd: open.reduce((sum, row) => sum + row.unrealizedUsd, 0),
+    pnlUsd: Math.abs(pnlUsd) < 1e-9 ? 0 : pnlUsd,
     positions: open,
     trades: [...book.trades].reverse(),
   };

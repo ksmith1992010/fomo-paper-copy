@@ -1,6 +1,6 @@
 import { STARTING_CASH, applyPrints, bookNeedsReset, closeOnMarks, emptyBook, resetBook, sanitizeBook, sleevesFor, snapshot } from "./paper.js";
 
-const STORAGE_KEY = "paper-copy-v3";
+const STORAGE_KEY = "paper-copy-v4";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 const qtyFmt = new Intl.NumberFormat("en-US", { maximumFractionDigits: 4 });
@@ -9,6 +9,7 @@ function loadBook() {
   try {
     localStorage.removeItem("paper-copy-v1");
     localStorage.removeItem("paper-copy-v2");
+    localStorage.removeItem("paper-copy-v3");
   } catch { /* private mode */ }
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
@@ -26,6 +27,10 @@ function saveBook(book) {
 }
 
 function cls(n) { return n >= 0 ? "up" : "down"; }
+function shown(n) {
+  const rounded = Math.round((Number(n) || 0) * 100) / 100;
+  return Math.abs(rounded) < 0.005 ? 0 : rounded;
+}
 
 function esc(value) {
   return String(value ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
@@ -52,10 +57,10 @@ function render(feed, book) {
   banner.className = feed.ok ? "" : "banner";
   banner.textContent = feed.ok ? "" : (feed.error || "The upstream feed is unavailable.");
   document.querySelector("#stats").innerHTML = `
-    <div class="frame"><span>Cash</span><strong>${money.format(view.cashUsd)}</strong></div>
-    <div class="frame"><span>Equity</span><strong>${money.format(view.equityUsd)}</strong></div>
-    <div class="frame"><span>Total P&L</span><strong class="${cls(view.pnlUsd)}">${money.format(view.pnlUsd)}</strong></div>
-    <div class="frame"><span>Realized</span><strong class="${cls(view.realizedUsd)}">${money.format(view.realizedUsd)}</strong></div>`;
+    <div class="frame"><span>Cash</span><strong>${money.format(shown(view.cashUsd))}</strong></div>
+    <div class="frame"><span>Equity</span><strong>${money.format(shown(view.equityUsd))}</strong></div>
+    <div class="frame"><span>Total P&L</span><strong class="${cls(shown(view.pnlUsd))}">${money.format(shown(view.pnlUsd))}</strong></div>
+    <div class="frame"><span>Realized</span><strong class="${cls(shown(view.realizedUsd))}">${money.format(shown(view.realizedUsd))}</strong></div>`;
   document.querySelector("#traders").innerHTML = traders.length ? traders.map((trader) => {
     const sleeve = Number(trader.sleeveUsd) > 0 ? Number(trader.sleeveUsd) : (sleeves[trader.id] || 0);
     return `
@@ -87,10 +92,7 @@ function render(feed, book) {
 function pricedPrints(feed) {
   const prints = [];
   for (const trader of feed.traders || []) prints.push(...(trader.prints || []));
-  return prints.map((print) => {
-    const dex = Number(feed.dexMarks?.[print.mint]);
-    return dex > 0 ? { ...print, priceUsd: dex } : print;
-  });
+  return prints;
 }
 
 function absorb(feed, book) {
@@ -100,8 +102,8 @@ function absorb(feed, book) {
     if (Number(trader.sleeveUsd) > 0) sleeves[trader.id] = Number(trader.sleeveUsd);
   }
   if (!Object.keys(sleeves).length) Object.assign(sleeves, sleevesFor(feed.traders || []));
-  closeOnMarks(book, feed.dexMarks || {}, feed.fetchedAt);
   applyPrints(book, pricedPrints(feed), sleeves);
+  closeOnMarks(book, feed.dexMarks || {}, feed.fetchedAt);
   saveBook(book);
   render(feed, book);
 }
