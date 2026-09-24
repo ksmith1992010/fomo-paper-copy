@@ -19,13 +19,13 @@ The top 3 are FOMO's own 24h leaderboard. Set `FOMO_API_KEY` in the environment.
 - `GET https://api.fomoapi.io/v2/leaderboard/24h?limit=3`
 - `GET https://api.fomoapi.io/v2/users/{userId}/trades?limit=10`
 
-Traders are keyed by `userId`. Each trade row becomes a buy when it has a bought amount and entry price, and a sell when it has a sold amount and exit price. If FOMO does not include a usable token price, the mark comes from `GET https://api.dexscreener.com/latest/dex/tokens/{mints}`. The browser talks only to `/api/feed`.
+Traders are keyed by `userId`. Each trade row becomes a buy when it has a bought amount and entry price, and a sell when it has a sold amount and exit price. Marks come from `GET https://api.dexscreener.com/latest/dex/tokens/{mints}`. If DexScreener has no price, equity falls back to the FOMO price. The +20% and −15% exits use the DexScreener mark only. The browser talks only to `/api/feed`.
 
 ## Paper rules
 
-- Start with $10,000 of paper cash.
-- Three traders share the book in equal slices of $3,333.33. One trader cannot spend another trader's slice.
-- A mirrored trade's size is that print's share of the trader's taped volume, times the slice: `slice * (printUsd / traderVolumeUsd)`, capped by cash and by slice still unused.
-- Buys spend cash and open a position. Sells close only that trader's lots and realize P&L. Sells with no lot are skipped.
-- Prints under $25, and paper fills under $1, are dust and are skipped. A print id that was already applied is skipped.
-- P&L is equity minus $10,000. Equity is cash plus open quantity marked at FOMO's price, or DexScreener when FOMO has no usable price.
+- Start with $1,000 of paper cash. The book lives in the browser under `paper-copy-v3`, so an older $10,000 book is not reused.
+- Each trader gets a sleeve weighted by their 24h PnL on the FOMO board. A sleeve is at least 15% and at most 50% of the book. The three sleeves are then adjusted so they sum to $1,000. If every PnL is zero or negative, the sleeves are equal. The sleeve size is shown on that trader's card.
+- A new buy spends 8% of that trader's remaining sleeve (sleeve minus the cost of open lots), and never more than cash on hand. If that amount is under $5, or the sleeve is already spent, the buy is skipped.
+- A lot closes when the DexScreener mark is 20% above its entry, or 15% below it. A FOMO sell also closes that trader's lot in the token. Realized P&L is recorded only on those closes.
+- A print id that was already applied is skipped.
+- P&L is equity minus $1,000. Equity is cash plus open lots at the latest mark.

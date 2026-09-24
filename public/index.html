@@ -7,23 +7,33 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <div class="grid-overlay" aria-hidden="true"></div>
   <div class="scan" aria-hidden="true"></div>
   <main>
-    <header>
+    <header class="deck">
+      <div class="reactor" aria-hidden="true">
+        <i class="orbit"></i>
+        <i class="orbit inner"></i>
+        <i class="core"></i>
+      </div>
       <div>
         <p class="kicker">Paper copy · command deck</p>
-        <h1>Jarvis</h1>
+        <h1>J.A.R.V.I.S.</h1>
         <p id="source">Acquiring the board…</p>
+        <p class="book">Simulated book · $1,000</p>
       </div>
-      <button id="refresh" type="button">Refresh</button>
+      <div class="header-meta">
+        <p id="clock">--:--:-- UTC</p>
+        <button id="refresh" type="button">Sync</button>
+      </div>
     </header>
     <div id="banner"></div>
     <section class="stats" id="stats"></section>
     <section class="grid" id="traders"></section>
     <h2>Trade tape</h2>
-    <div class="panel" id="trades"></div>
+    <div class="panel frame" id="trades"></div>
     <h2>Open positions</h2>
-    <div class="panel" id="positions"></div>
+    <div class="panel frame" id="positions"></div>
     <footer id="foot"></footer>
   </main>
   <script type="module" src="/app.js"></script>
