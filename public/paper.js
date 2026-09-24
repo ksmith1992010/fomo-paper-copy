@@ -16,7 +16,7 @@ export const SLEEVE_FLOOR = 0.15;
 export const SLEEVE_CAP = 0.5;
 export const BUY_FRACTION = 0.08;
 export const MIN_BUY_USD = 5;
-export const TAKE_PROFIT = 0.2;
+export const TAKE_PROFIT = 1;
 export const STOP_LOSS = 0.15;
 
 export function emptyBook() {
@@ -73,11 +73,12 @@ export function alignUsdPrice(quote, human) {
   const ratio = dex / basis;
   if (!(ratio > 0)) return dex;
   const exp = Math.round(Math.log10(ratio));
-  if (Math.abs(exp) < 6) return dex;
+  // A 10× or 100× quote is a real mark. A few-thousand-times gap is not a rally.
+  if (Math.abs(exp) < 3) return dex;
   const scaled = dex / 10 ** exp;
   const check = scaled / basis;
   if (check >= 0.25 && check <= 4) return scaled;
-  return dex;
+  return basis;
 }
 
 function lotKey(traderId, mint) {
@@ -204,7 +205,7 @@ function closeHeld(book, key, price, print, onlyLots) {
 }
 
 function whyFor(reason) {
-  if (reason === "target") return "DexScreener mark is 20% above entry";
+  if (reason === "target") return "DexScreener mark is 100% above entry";
   if (reason === "stop") return "DexScreener mark is 15% below entry";
   return "Leader sold a coin this sleeve holds";
 }
@@ -400,7 +401,7 @@ export function applyPrints(book, prints, sleeves) {
   return { book, counts };
 }
 
-/** Close a lot when the DexScreener mark is +20% or -15% from its entry. */
+/** Close a lot when the DexScreener mark doubles, or is 15% under entry. A quote beyond 100× entry is skipped. */
 export function closeOnMarks(book, dexMarks, ts) {
   const closed = [];
   for (const [key, lots] of Object.entries({ ...book.lots })) {
@@ -411,8 +412,10 @@ export function closeOnMarks(book, dexMarks, ts) {
     const qty = open.reduce((sum, lot) => sum + Number(lot.qty), 0);
     const cost = open.reduce((sum, lot) => sum + Number(lot.costUsd), 0);
     const basis = qty > 0 ? cost / qty : 0;
+    const ratio = basis > 0 ? raw / basis : 0;
+    if (!(ratio >= 0.01) || ratio > 100) continue;
     const mark = alignUsdPrice(raw, basis);
-    if (!(mark > 0)) continue;
+    if (!(mark > 0) || mark / basis > 100 || mark / basis < 0.01) continue;
     const hit = open.filter((lot) => {
       const entry = Number(lot.entryUsd) > 0 ? Number(lot.entryUsd) : basis;
       return mark >= entry * (1 + TAKE_PROFIT) || mark <= entry * (1 - STOP_LOSS);

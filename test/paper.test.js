@@ -84,7 +84,7 @@ test("a buy is 8% of the remaining sleeve and skips under $5", () => {
   assert.equal(tiny.trades.length, 0);
 });
 
-test("DexScreener +20% and -15% close the lot and realize P&L", () => {
+test("DexScreener +100% and -15% close the lot and realize P&L", () => {
   const book = emptyBook();
   applyPrint(book, {
     id: "buy",
@@ -95,9 +95,9 @@ test("DexScreener +20% and -15% close the lot and realize P&L", () => {
     symbol: "AAA",
     priceUsd: 10,
   }, { wallet: 250 });
-  assert.equal(closeOnMarks(book, { Mint111: 11.9 }, "2026-09-24T00:02:00Z").length, 0);
+  assert.equal(closeOnMarks(book, { Mint111: 19.9 }, "2026-09-24T00:02:00Z").length, 0);
 
-  const target = closeOnMarks(book, { Mint111: 12 }, "2026-09-24T00:03:00Z");
+  const target = closeOnMarks(book, { Mint111: 20 }, "2026-09-24T00:03:00Z");
   assert.equal(target.length, 1);
   assert.equal(target[0].reason, "target");
   assert.ok(target[0].realizedUsd > 0);
@@ -281,6 +281,9 @@ test("a DexScreener quote off by 10^decimals is scaled onto the human price", ()
   assert.ok(Math.abs(aligned - human) / human < 1e-9);
   const moved = alignUsdPrice(human * 3.7, human);
   assert.ok(Math.abs(moved - human * 3.7) < 1e-12);
+  assert.equal(alignUsdPrice(human * 10, human), human * 10);
+  const blown = alignUsdPrice(human * 4900, human);
+  assert.ok(blown < human * 100);
   assert.equal(alignUsdPrice(0, human), human);
 });
 
@@ -308,11 +311,15 @@ test("a decimal-shifted mark does not invent P&L, and a real move does", () => {
   assert.ok(Math.abs(marked.unrealizedUsd - (entry * 1.1 - entry) * qty) < 1e-6);
   assert.equal(marked.realizedUsd, 0);
 
-  const closed = closeOnMarks(book, { Mint111: entry * 1.25 * 1e9 }, "2026-09-24T00:02:00Z");
-  assert.equal(closed.length, 1);
-  assert.ok(Math.abs(closed[0].priceUsd - entry * 1.25) / entry < 1e-6);
-  assert.ok(Math.abs(closed[0].realizedUsd - 20 * 0.25) < 1e-6);
-  assert.ok(book.cashUsd < 2_000);
+  const skipped = closeOnMarks(book, { Mint111: entry * 4900 }, "2026-09-24T00:02:00Z");
+  assert.equal(skipped.length, 0);
+  assert.equal(book.cashUsd, cash);
+  assert.ok(book.lots["wallet|Mint111"]);
+
+  const ten = closeOnMarks(book, { Mint111: entry * 10 }, "2026-09-24T00:03:00Z");
+  assert.equal(ten.length, 1);
+  assert.equal(ten[0].reason, "target");
+  assert.ok(Math.abs(ten[0].priceUsd - entry * 10) / entry < 1e-6);
   assert.equal(book.lots["wallet|Mint111"], undefined);
 });
 
