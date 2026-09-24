@@ -75,13 +75,45 @@ export function sleevesFor(traders) {
   return sleeves;
 }
 
-function closeLots(book, key, price, print) {
-  const lots = book.lots[key] || [];
-  if (!lots.length || !(price > 0)) return null;
-  const qty = lots.reduce((sum, lot) => sum + lot.qty, 0);
-  const cost = lots.reduce((sum, lot) => sum + lot.costUsd, 0);
-  const proceeds = qty * price;
-  delete book.lots[key];
+function positiveLots(lots) {
+  return (lots || []).filter((lot) => Number(lot.qty) > 0 && Number(lot.costUsd) >= 0);
+}
+
+/** Close at most the open quantity on this trader's mint. No lot means no sell. */
+function closeHeld(book, key, price, print, onlyLots) {
+  const all = book.lots[key] || [];
+  const heldLots = positiveLots(onlyLots || all).filter((lot) => all.includes(lot));
+  const heldQty = heldLots.reduce((sum, lot) => sum + Number(lot.qty), 0);
+  if (!(heldQty > 0) || !(Number(price) > 0)) return null;
+  const requested = Number(print.closeQty);
+  const qty = Math.min(heldQty, requested > 0 ? requested : heldQty);
+  if (!(qty > 0)) return null;
+
+  let left = qty;
+  let cost = 0;
+  const used = [];
+  for (const lot of heldLots) {
+    if (left <= 1e-12) break;
+    const take = Math.min(Number(lot.qty), left);
+    const frac = take / Number(lot.qty);
+    cost += Number(lot.costUsd) * frac;
+    left -= take;
+    used.push(lot);
+    const remainQty = Number(lot.qty) - take;
+    if (remainQty > 1e-10) {
+      lot.qty = remainQty;
+      lot.costUsd = Number(lot.costUsd) * (1 - frac);
+    } else {
+      lot.qty = 0;
+    }
+  }
+  const keep = all.filter((lot) => Number(lot.qty) > 1e-10);
+  if (keep.length) book.lots[key] = keep;
+  else delete book.lots[key];
+
+  const filled = qty - Math.max(0, left);
+  if (!(filled > 0)) return null;
+  const proceeds = filled * Number(price);
   book.cashUsd += proceeds;
   const trade = {
     id: print.id,
@@ -90,10 +122,10 @@ function closeLots(book, key, price, print) {
     traderId: print.traderId,
     traderName: print.traderName,
     mint: print.mint,
-    symbol: print.symbol || lots[0].symbol,
-    qty,
+    symbol: print.symbol || used[0]?.symbol,
+    qty: filled,
     usd: proceeds,
-    priceUsd: price,
+    priceUsd: Number(price),
     realizedUsd: proceeds - cost,
     reason: print.reason || "sell",
   };
@@ -113,13 +145,15 @@ export function applyPrint(book, print, sleeves) {
 
   if (print.side !== "sell") {
     const remaining = Math.max(0, (Number(sleeves?.[print.traderId]) || 0) - usedUsd(book, print.traderId));
-    const buyUsd = Math.min(remaining * BUY_FRACTION, book.cashUsd);
-    if (!(buyUsd >= MIN_BUY_USD)) {
+    const slice = remaining * BUY_FRACTION;
+    const cash = Math.max(0, book.cashUsd);
+    const buyUsd = Math.min(slice, cash, remaining);
+    if (!(buyUsd >= MIN_BUY_USD) || book.cashUsd - buyUsd < -1e-9) {
       book.seen[id] = "small";
       return { book, status: "small" };
     }
     const qty = buyUsd / price;
-    const lots = book.lots[key] || [];
+    const lots = positiveLots(book.lots[key]);
     lots.push({ qty, costUsd: buyUsd, entryUsd: price, symbol: print.symbol });
     book.lots[key] = lots;
     book.cashUsd -= buyUsd;
@@ -140,7 +174,7 @@ export function applyPrint(book, print, sleeves) {
     return { book, status: "buy" };
   }
 
-  const closed = closeLots(book, key, price, { ...print, reason: "sell" });
+  const closed = closeHeld(book, key, price, { ...print, reason: "sell" });
   book.seen[id] = closed ? "sell" : "flat";
   return { book, status: closed ? "sell" : "flat" };
 }
@@ -158,47 +192,74 @@ export function applyPrints(book, prints, sleeves) {
 /** Close a lot when the DexScreener mark is +20% or -15% from its entry. */
 export function closeOnMarks(book, dexMarks, ts) {
   const closed = [];
-  for (const [key, lots] of Object.entries(book.lots)) {
+  for (const [key, lots] of Object.entries({ ...book.lots })) {
     const [traderId, mint] = key.split("|");
     const mark = Number(dexMarks?.[mint]);
-    if (!(mark > 0)) continue;
-    const hit = lots.filter((lot) => mark >= lot.entryUsd * (1 + TAKE_PROFIT) || mark <= lot.entryUsd * (1 - STOP_LOSS));
+    const open = positiveLots(lots);
+    if (!(mark > 0) || !open.length) continue;
+    const hit = open.filter((lot) => mark >= lot.entryUsd * (1 + TAKE_PROFIT) || mark <= lot.entryUsd * (1 - STOP_LOSS));
     if (!hit.length) continue;
     const reason = mark >= hit[0].entryUsd * (1 + TAKE_PROFIT) ? "target" : "stop";
-    if (hit.length !== lots.length) {
-      book.lots[key] = lots.filter((lot) => !hit.includes(lot));
-      const qty = hit.reduce((sum, lot) => sum + lot.qty, 0);
-      const cost = hit.reduce((sum, lot) => sum + lot.costUsd, 0);
-      const proceeds = qty * mark;
-      book.cashUsd += proceeds;
-      const trade = {
-        id: `exit:${key}:${reason}:${hit[0].entryUsd}`,
-        ts: ts || new Date().toISOString(),
-        side: "sell",
-        traderId,
-        mint,
-        symbol: hit[0].symbol,
-        qty,
-        usd: proceeds,
-        priceUsd: mark,
-        realizedUsd: proceeds - cost,
-        reason,
-      };
-      book.trades.push(trade);
-      closed.push(trade);
-      continue;
-    }
-    const trade = closeLots(book, key, mark, {
-      id: `exit:${key}:${reason}:${lots[0].entryUsd}`,
+    const trade = closeHeld(book, key, mark, {
+      id: `exit:${key}:${reason}:${hit[0].entryUsd}`,
       ts: ts || new Date().toISOString(),
       traderId,
       mint,
-      symbol: lots[0].symbol,
+      symbol: hit[0].symbol,
       reason,
-    });
+    }, hit);
     if (trade) closed.push(trade);
   }
   return closed;
+}
+
+function copyBook(book, next) {
+  book.cashUsd = next.cashUsd;
+  book.startingUsd = next.startingUsd;
+  book.lots = next.lots;
+  book.seen = next.seen;
+  book.trades = next.trades;
+  return book;
+}
+
+/** A phantom sell or a negative balance means the saved book cannot be trusted. */
+export function bookNeedsReset(book) {
+  if (!book || typeof book.cashUsd !== "number" || book.cashUsd < -1e-6) return true;
+  if (book.startingUsd !== STARTING_CASH) return true;
+  for (const lots of Object.values(book.lots || {})) {
+    for (const lot of lots || []) {
+      if (!(Number(lot.qty) > 0) || Number(lot.costUsd) < 0) return true;
+    }
+  }
+  const open = {};
+  let cash = STARTING_CASH;
+  const trades = [...(book.trades || [])].sort((a, b) => String(a.ts).localeCompare(String(b.ts)) || String(a.id).localeCompare(String(b.id)));
+  for (const trade of trades) {
+    const key = lotKey(trade.traderId, trade.mint);
+    const qty = Number(trade.qty);
+    if (!(qty > 0)) return true;
+    if (trade.side === "sell") {
+      const held = open[key] || 0;
+      if (!(held > 1e-8) || qty > held + 1e-6) return true;
+      open[key] = held - qty;
+      if (open[key] <= 1e-8) delete open[key];
+      cash += Number(trade.usd) || 0;
+    } else {
+      open[key] = (open[key] || 0) + qty;
+      cash -= Number(trade.usd) || 0;
+    }
+    if (cash < -1e-4) return true;
+  }
+  return false;
+}
+
+export function resetBook(book) {
+  return copyBook(book, emptyBook());
+}
+
+export function sanitizeBook(saved) {
+  if (!saved || bookNeedsReset(saved)) return emptyBook();
+  return saved;
 }
 
 export function positions(book, marks) {

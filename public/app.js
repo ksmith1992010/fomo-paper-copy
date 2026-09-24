@@ -1,4 +1,4 @@
-import { STARTING_CASH, applyPrints, closeOnMarks, emptyBook, sleevesFor, snapshot } from "./paper.js";
+import { STARTING_CASH, applyPrints, bookNeedsReset, closeOnMarks, emptyBook, resetBook, sanitizeBook, sleevesFor, snapshot } from "./paper.js";
 
 const STORAGE_KEY = "paper-copy-v3";
 
@@ -12,8 +12,10 @@ function loadBook() {
   } catch { /* private mode */ }
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-    if (saved && saved.startingUsd === STARTING_CASH && typeof saved.cashUsd === "number" && saved.lots && saved.seen) {
-      return saved;
+    if (saved && saved.lots && saved.seen) {
+      const book = sanitizeBook(saved);
+      if (book !== saved) saveBook(book);
+      return book;
     }
   } catch { /* fresh book */ }
   return emptyBook();
@@ -42,7 +44,7 @@ function gauge(usd) {
 }
 
 function render(feed, book) {
-  const view = snapshot(book, feed.marks || {});
+  const view = snapshot(book, feed.dexMarks || {});
   const traders = feed.traders || [];
   const sleeves = sleevesFor(traders);
   document.querySelector("#source").textContent = feed.source || "No source";
@@ -92,6 +94,7 @@ function pricedPrints(feed) {
 }
 
 function absorb(feed, book) {
+  if (bookNeedsReset(book)) resetBook(book);
   const sleeves = {};
   for (const trader of feed.traders || []) {
     if (Number(trader.sleeveUsd) > 0) sleeves[trader.id] = Number(trader.sleeveUsd);

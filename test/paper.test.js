@@ -4,8 +4,10 @@ import {
   STARTING_CASH,
   applyPrint,
   applyPrints,
+  bookNeedsReset,
   closeOnMarks,
   emptyBook,
+  sanitizeBook,
   sleeveSizes,
   snapshot,
 } from "../lib/paper.js";
@@ -151,6 +153,92 @@ test("a FOMO sell closes that trader's lot and duplicates are ignored", () => {
   assert.ok(Math.abs(view.pnlUsd - view.realizedUsd) < 1e-6);
   assert.ok(view.realizedUsd > 0);
   assert.ok(Math.abs((view.cashUsd - 1_000) - view.realizedUsd) < 1e-6);
+});
+
+test("a sell with no lot is skipped and cannot touch another trader", () => {
+  const book = emptyBook();
+  const sleeves = { ada: 250, bob: 250 };
+  applyPrint(book, {
+    id: "bob-buy",
+    ts: "2026-09-24T00:00:00Z",
+    traderId: "bob",
+    side: "buy",
+    mint: "Mint111",
+    symbol: "AAA",
+    usd: 80_000,
+    priceUsd: 10,
+  }, sleeves);
+  const cash = book.cashUsd;
+  const held = book.lots["bob|Mint111"][0].qty;
+  const skipped = applyPrint(book, {
+    id: "ada-sell",
+    ts: "2026-09-24T00:01:00Z",
+    traderId: "ada",
+    side: "sell",
+    mint: "Mint111",
+    symbol: "AAA",
+    usd: 90_000,
+    priceUsd: 40,
+    closeQty: 1_000,
+  }, sleeves);
+  assert.equal(skipped.status, "flat");
+  assert.equal(book.trades.filter((trade) => trade.side === "sell").length, 0);
+  assert.equal(book.cashUsd, cash);
+  assert.equal(book.lots["bob|Mint111"][0].qty, held);
+  assert.ok(book.cashUsd >= 0);
+
+  const bare = emptyBook();
+  assert.equal(closeOnMarks(bare, { Mint111: 1 }, "2026-09-24T00:02:00Z").length, 0);
+  assert.equal(bare.trades.length, 0);
+  assert.equal(bare.cashUsd, 1_000);
+
+  const closed = applyPrint(book, {
+    id: "bob-sell",
+    ts: "2026-09-24T00:03:00Z",
+    traderId: "bob",
+    side: "sell",
+    mint: "Mint111",
+    symbol: "AAA",
+    usd: 90_000,
+    priceUsd: 12,
+    closeQty: held * 10,
+  }, sleeves);
+  assert.equal(closed.status, "sell");
+  assert.ok(Math.abs(closed.book.trades.at(-1).qty - held) < 1e-9);
+  assert.equal(book.lots["bob|Mint111"], undefined);
+  assert.ok(book.cashUsd > cash);
+  assert.equal(applyPrint(book, {
+    id: "bob-sell-again",
+    ts: "2026-09-24T00:04:00Z",
+    traderId: "bob",
+    side: "sell",
+    mint: "Mint111",
+    symbol: "AAA",
+    priceUsd: 12,
+  }, sleeves).status, "flat");
+});
+
+test("a saved phantom sell or negative cash resets the book", () => {
+  const phantom = emptyBook();
+  phantom.trades.push({
+    id: "ghost",
+    ts: "2026-09-24T00:00:00Z",
+    side: "sell",
+    traderId: "ada",
+    mint: "Mint111",
+    qty: 2,
+    usd: 20,
+  });
+  assert.equal(bookNeedsReset(phantom), true);
+  const cleared = sanitizeBook(phantom);
+  assert.equal(cleared.cashUsd, 1_000);
+  assert.deepEqual(cleared.lots, {});
+  assert.equal(cleared.trades.length, 0);
+
+  const negative = emptyBook();
+  negative.cashUsd = -12;
+  assert.equal(sanitizeBook(negative).cashUsd, 1_000);
+  assert.equal(bookNeedsReset(emptyBook()), false);
 });
 
 test("open P&L is equity minus $1,000 and is unrealized until a close", () => {
