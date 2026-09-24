@@ -61,6 +61,21 @@ function signed(n) {
   return money.format(0);
 }
 
+function unrealizedText(n) {
+  if (n == null || !Number.isFinite(Number(n))) return "—";
+  const value = Number(n);
+  if (Math.abs(value) < 1e-12) return money.format(0);
+  const abs = Math.abs(value);
+  const digits = abs >= 0.01 ? 2 : 6;
+  const text = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: digits,
+  }).format(abs);
+  return `${value > 0 ? "+" : "-"}${text}`;
+}
+
 function liveVsEntry(line, marks) {
   if (line.outcome !== "opened") return null;
   const entry = Number(line.entryUsd);
@@ -113,7 +128,7 @@ function render(feed, book) {
     }).join("")}
   </tbody></table>` : `<p class="empty">No mirrored trades yet.</p>`;
   document.querySelector("#positions").innerHTML = view.positions.length ? `<table><thead><tr><th>Token</th><th>Qty</th><th>Value</th><th>Unrealized</th></tr></thead><tbody>
-    ${view.positions.map((row) => `<tr><td><span class="ticker">${art(images[row.mint])}<span>${esc(row.symbol)}</span></span></td><td>${qtyFmt.format(row.qty)}</td><td>${money.format(row.valueUsd)}</td><td class="${cls(row.unrealizedUsd)}">${money.format(row.unrealizedUsd)}</td></tr>`).join("")}
+    ${view.positions.map((row) => `<tr><td><span class="ticker">${art(images[row.mint])}<span>${esc(row.symbol)}</span></span></td><td>${qtyFmt.format(row.qty)}</td><td>${money.format(row.valueUsd)}</td><td class="${row.unrealizedUsd == null ? "" : cls(row.unrealizedUsd)}">${unrealizedText(row.unrealizedUsd)}</td></tr>`).join("")}
   </tbody></table>` : `<p class="empty">No open paper positions.</p>`;
   const worked = (feed.routes || []).filter((route) => route.ok).map((route) => route.url.split("?")[0]);
   document.querySelector("#foot").textContent = worked.length ? `Live routes: ${[...new Set(worked)].join(" · ")}` : "No upstream route succeeded on the last refresh.";

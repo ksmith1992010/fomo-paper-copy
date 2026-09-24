@@ -461,12 +461,12 @@ export function positions(book, marks) {
     if (qty <= 1e-10) continue;
     const entry = costUsd / qty;
     const quoted = Number(marks?.[mint]);
-    const mark = quoted > 0 ? alignUsdPrice(quoted, entry) : entry;
-    const unrealizedUsd = lots.reduce((sum, lot) => {
+    const mark = quoted > 0 ? alignUsdPrice(quoted, entry) : null;
+    const unrealizedUsd = mark == null ? null : lots.reduce((sum, lot) => {
       const lotEntry = Number(lot.entryUsd) > 0 ? Number(lot.entryUsd) : entry;
       return sum + (mark - lotEntry) * Number(lot.qty);
     }, 0);
-    const valueUsd = costUsd + unrealizedUsd;
+    const valueUsd = unrealizedUsd == null ? costUsd : costUsd + unrealizedUsd;
     rows.push({
       traderId,
       mint,
@@ -494,7 +494,7 @@ export function snapshot(book, marks) {
     equityUsd,
     valueUsd,
     realizedUsd,
-    unrealizedUsd: open.reduce((sum, row) => sum + row.unrealizedUsd, 0),
+    unrealizedUsd: open.reduce((sum, row) => sum + (row.unrealizedUsd == null ? 0 : row.unrealizedUsd), 0),
     pnlUsd: Math.abs(pnlUsd) < 1e-9 ? 0 : pnlUsd,
     positions: open,
     trades: [...book.trades].reverse(),

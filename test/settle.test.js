@@ -41,3 +41,30 @@ test("a missing server book starts at $1,000 and two clients share it", async ()
   assert.equal(first.book.ledger.length, second.book.ledger.length);
   assert.ok(left.equityUsd !== 1);
 });
+
+test("an open lot is marked from DexScreener on the same feed", async () => {
+  const store = memoryBookStore();
+  await settleFeed(feed, { store });
+  const marked = await settleFeed({
+    ...feed,
+    dexMarks: {},
+    traders: [{ id: "ada", sleeveUsd: 1000, prints: [] }],
+  }, {
+    store,
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        pairs: [{
+          baseToken: { address: "MintA", symbol: "AAA" },
+          priceUsd: "2.1",
+          liquidity: { usd: 5000 },
+        }],
+      }),
+    }),
+  });
+  const { positions } = await import("../lib/paper.js");
+  const row = positions(marked.book, marked.dexMarks).find((item) => item.mint === "MintA");
+  assert.equal(row.markUsd, 2.1);
+  assert.ok(Math.abs(row.unrealizedUsd - (2.1 - 2) * row.qty) < 1e-9);
+});

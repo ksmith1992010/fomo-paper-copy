@@ -15,6 +15,7 @@ import {
   snapshot,
   ensureSleeveCash,
   sleeveEquity,
+  positions,
 } from "../lib/paper.js";
 
 test("sleeves stay inside 15–50% and sum to the book", () => {
@@ -268,6 +269,9 @@ test("open P&L is equity minus $1,000 and is unrealized until a close", () => {
   const qty = book.lots["wallet|Mint111"][0].qty;
   assert.ok(Math.abs(up.unrealizedUsd - (15 - 10) * qty) < 1e-6);
   assert.ok(Math.abs(up.positions[0].unrealizedUsd - up.unrealizedUsd) < 1e-6);
+  const missing = positions(book, {});
+  assert.equal(missing[0].markUsd, null);
+  assert.equal(missing[0].unrealizedUsd, null);
 });
 
 test("a DexScreener quote off by 10^decimals is scaled onto the human price", () => {
