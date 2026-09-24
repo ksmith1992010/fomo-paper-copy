@@ -17,6 +17,7 @@ export const SLEEVE_CAP = 0.5;
 export const BUY_FRACTION = 0.08;
 export const MIN_BUY_USD = 5;
 export const TAKE_PROFIT = 1;
+export const RUNNER = 2;
 export const STOP_LOSS = 0.15;
 
 export function emptyBook() {
@@ -205,7 +206,8 @@ function closeHeld(book, key, price, print, onlyLots) {
 }
 
 function whyFor(reason) {
-  if (reason === "target") return "DexScreener mark is 100% above entry";
+  if (reason === "half") return "DexScreener mark is 100% above entry; sold half";
+  if (reason === "runner") return "DexScreener mark is 200% above entry";
   if (reason === "stop") return "DexScreener mark is 15% below entry";
   return "Leader sold a coin this sleeve holds";
 }
@@ -401,36 +403,44 @@ export function applyPrints(book, prints, sleeves) {
   return { book, counts };
 }
 
-/** Close a lot when the DexScreener mark doubles, or is 15% under entry. A quote beyond 100× entry is skipped. */
+/** At +100% sell half. The rest closes at +200%, on a leader sell, or on the −15% stop. A quote beyond 100× entry is skipped. */
 export function closeOnMarks(book, dexMarks, ts) {
   const closed = [];
+  const when = ts || new Date().toISOString();
   for (const [key, lots] of Object.entries({ ...book.lots })) {
     const [traderId, mint] = key.split("|");
     const raw = Number(dexMarks?.[mint]);
-    const open = positiveLots(lots);
-    if (!(raw > 0) || !open.length) continue;
-    const qty = open.reduce((sum, lot) => sum + Number(lot.qty), 0);
-    const cost = open.reduce((sum, lot) => sum + Number(lot.costUsd), 0);
-    const basis = qty > 0 ? cost / qty : 0;
-    const ratio = basis > 0 ? raw / basis : 0;
-    if (!(ratio >= 0.01) || ratio > 100) continue;
-    const mark = alignUsdPrice(raw, basis);
-    if (!(mark > 0) || mark / basis > 100 || mark / basis < 0.01) continue;
-    const hit = open.filter((lot) => {
-      const entry = Number(lot.entryUsd) > 0 ? Number(lot.entryUsd) : basis;
-      return mark >= entry * (1 + TAKE_PROFIT) || mark <= entry * (1 - STOP_LOSS);
-    });
-    if (!hit.length) continue;
-    const reason = mark >= hit[0].entryUsd * (1 + TAKE_PROFIT) ? "target" : "stop";
-    const trade = closeHeld(book, key, mark, {
-      id: `exit:${key}:${reason}:${hit[0].entryUsd}`,
-      ts: ts || new Date().toISOString(),
-      traderId,
-      mint,
-      symbol: hit[0].symbol,
-      reason,
-    }, hit);
-    if (trade) closed.push(trade);
+    if (!(raw > 0)) continue;
+    for (const lot of [...positiveLots(lots)]) {
+      if (!(Number(lot.qty) > 1e-10)) continue;
+      const entry = Number(lot.entryUsd);
+      if (!(entry > 0)) continue;
+      const ratio = raw / entry;
+      if (ratio > 100 || ratio < 0.01) continue;
+      const mark = alignUsdPrice(raw, entry);
+      if (!(mark > 0) || mark / entry > 100 || mark / entry < 0.01) continue;
+      let reason = "";
+      let closeQty = Number(lot.qty);
+      if (mark <= entry * (1 - STOP_LOSS)) reason = "stop";
+      else if (mark >= entry * (1 + RUNNER)) reason = "runner";
+      else if (!lot.halfSold && mark >= entry * (1 + TAKE_PROFIT)) {
+        reason = "half";
+        closeQty = Number(lot.qty) / 2;
+      }
+      if (!reason) continue;
+      const before = Number(lot.qty);
+      const trade = closeHeld(book, key, mark, {
+        id: `exit:${key}:${reason}:${entry}:${before}`,
+        ts: when,
+        traderId,
+        mint,
+        symbol: lot.symbol,
+        reason,
+        closeQty,
+      }, [lot]);
+      if (reason === "half" && Number(lot.qty) > 1e-10) lot.halfSold = true;
+      if (trade) closed.push(trade);
+    }
   }
   return closed;
 }
