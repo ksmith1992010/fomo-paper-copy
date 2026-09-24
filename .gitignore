@@ -1,0 +1,7 @@
+.netlify
+node_modules
+.env
+.env.*
+data
+agent-tools
+*.log
