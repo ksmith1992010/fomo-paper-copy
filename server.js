@@ -46,7 +46,7 @@ const server = http.createServer(async (request, response) => {
   }
   let body = fs.readFileSync(filePath);
   if (filePath.endsWith("index.html")) {
-    const feed = await loadFeed().catch((error) => ({ ok: false, error: error.message || "Feed failed", traders: [], routes: [] }));
+    const feed = await loadFeed({ fomoKey: process.env.FOMO_API_KEY || "" }).catch((error) => ({ ok: false, error: error.message || "Feed failed", traders: [], routes: [] }));
     const inline = JSON.stringify(feed).replace(/</g, "\\u003c");
     body = Buffer.from(body.toString("utf8").replace("/*__FEED__*/null", inline));
   }

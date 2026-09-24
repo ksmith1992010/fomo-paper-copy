@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Paper copy · Jarvis deck</title>
+  <title>Podium</title>
+  <link rel="icon" type="image/png" href="/podium-logo.png">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -11,20 +12,25 @@
   <div class="scan" aria-hidden="true"></div>
   <main>
     <header class="deck">
-      <div class="reactor" aria-hidden="true">
-        <i class="orbit"></i>
-        <i class="orbit inner"></i>
-        <i class="core"></i>
-      </div>
-      <div>
-        <p class="kicker">Paper copy · command deck</p>
-        <h1>J.A.R.V.I.S.</h1>
-        <p id="source">Acquiring the board…</p>
-        <p class="book">Simulated book · $1,000</p>
+      <div class="brand">
+        <img class="mark" src="/podium-logo.png" alt="" width="76" height="76">
+        <div>
+          <p class="kicker">Paper copy · command deck</p>
+          <h1>PODIUM</h1>
+          <p id="source">Acquiring the board…</p>
+          <p class="book">Simulated book · $1,000</p>
+        </div>
       </div>
       <div class="header-meta">
-        <p id="clock">--:--:-- UTC</p>
-        <button id="refresh" type="button">Sync</button>
+        <div class="reactor" aria-hidden="true">
+          <i class="orbit"></i>
+          <i class="orbit inner"></i>
+          <i class="core"></i>
+        </div>
+        <div class="meta-copy">
+          <p id="clock">--:--:-- UTC</p>
+          <button id="refresh" type="button">Sync</button>
+        </div>
       </div>
     </header>
     <div id="banner"></div>

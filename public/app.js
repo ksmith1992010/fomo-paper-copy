@@ -118,7 +118,7 @@ tick();
 setInterval(tick, 1000);
 
 const embedded = window.__FEED__;
-if (embedded && (embedded.traders || embedded.error)) absorb(embedded, book);
+if (embedded && embedded.ok) absorb(embedded, book);
 else refresh(false).catch((error) => render({ ok: false, error: error.message, traders: [], routes: [] }, book));
 
 document.querySelector("#refresh").addEventListener("click", () => {

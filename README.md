@@ -1,6 +1,6 @@
-# Paper copy trader
+# Podium
 
-A single simulated book that mirrors the current top 3 traders on FOMO's 24h leaderboard. No orders are sent. No wallet keys.
+A Jarvis-style command deck for one simulated book that mirrors the current top 3 traders on FOMO's 24h leaderboard. No orders are sent. No wallet keys.
 
 ## Run
 
