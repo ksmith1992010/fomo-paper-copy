@@ -28,6 +28,7 @@ export function emptyBook() {
     seen: {},
     trades: [],
     ledger: [],
+    sleeveCash: null,
   };
 }
 
@@ -49,16 +50,6 @@ export function alignUsdPrice(quote, human) {
 
 function lotKey(traderId, mint) {
   return `${traderId}|${mint}`;
-}
-
-function usedUsd(book, traderId) {
-  let used = 0;
-  const prefix = `${traderId}|`;
-  for (const [key, lots] of Object.entries(book.lots)) {
-    if (!key.startsWith(prefix)) continue;
-    for (const lot of lots) used += lot.costUsd;
-  }
-  return used;
 }
 
 /** Weight by positive 24h PnL, then keep each sleeve inside 15–50% of the book. */
@@ -146,6 +137,7 @@ function closeHeld(book, key, price, print, onlyLots) {
   if (!(filled > 0)) return null;
   const proceeds = filled * Number(price);
   book.cashUsd += proceeds;
+  creditSleeve(book, print.traderId, proceeds);
   const trade = {
     id: print.id,
     ts: print.ts,
@@ -163,7 +155,7 @@ function closeHeld(book, key, price, print, onlyLots) {
   book.trades.push(trade);
   pushLedger(book, {
     id: trade.id,
-    ts: trade.ts,
+    ts: eventStamp(print),
     traderId: trade.traderId,
     traderName: trade.traderName,
     mint: trade.mint,
@@ -183,6 +175,50 @@ function whyFor(reason) {
   if (reason === "target") return "DexScreener mark is 20% above entry";
   if (reason === "stop") return "DexScreener mark is 15% below entry";
   return "Leader sold a coin this sleeve holds";
+}
+
+function eventStamp(print) {
+  const ts = print?.ts;
+  if (ts && !Number.isNaN(new Date(ts).getTime())) return ts;
+  return new Date().toISOString();
+}
+
+function creditSleeve(book, traderId, proceeds) {
+  if (!book.sleeveCash) book.sleeveCash = {};
+  const next = Math.max(0, (Number(book.sleeveCash[traderId]) || 0) + (Number(proceeds) || 0));
+  book.sleeveCash[traderId] = next;
+}
+
+/** Seed sleeve cash once from the opening allocation. Later gains and losses stay on that sleeve. */
+export function ensureSleeveCash(book, sleeves) {
+  if (book.sleeveCash) return book.sleeveCash;
+  const hasHistory = (book.trades || []).length > 0 || Object.keys(book.lots || {}).length > 0;
+  if (!Object.keys(sleeves || {}).length && !hasHistory) return null;
+  const openCost = {};
+  for (const [key, lots] of Object.entries(book.lots || {})) {
+    const traderId = key.split("|")[0];
+    openCost[traderId] = (openCost[traderId] || 0) + (lots || []).reduce((sum, lot) => sum + (Number(lot.costUsd) || 0), 0);
+  }
+  const realized = {};
+  for (const trade of book.trades || []) {
+    if (trade.side !== "sell") continue;
+    realized[trade.traderId] = (realized[trade.traderId] || 0) + (Number(trade.realizedUsd) || 0);
+  }
+  const ids = new Set([...Object.keys(sleeves || {}), ...Object.keys(openCost), ...Object.keys(realized)]);
+  const cash = {};
+  for (const id of ids) {
+    cash[id] = Math.max(0, (Number(sleeves?.[id]) || 0) - (openCost[id] || 0) + (realized[id] || 0));
+  }
+  book.sleeveCash = cash;
+  return cash;
+}
+
+export function sleeveEquity(book, traderId, marks) {
+  const cash = Math.max(0, Number(book.sleeveCash?.[traderId]) || 0);
+  const marked = positions(book, marks)
+    .filter((row) => row.traderId === traderId)
+    .reduce((sum, row) => sum + Number(row.valueUsd) || 0, 0);
+  return Math.max(0, cash + marked);
 }
 
 function pushLedger(book, line) {
@@ -218,7 +254,7 @@ export function applyPrint(book, print, sleeves) {
     book.seen[id] = "skip";
     pushLedger(book, {
       id,
-      ts: print.ts,
+      ts: eventStamp(print),
       traderId: print.traderId,
       traderName: print.traderName,
       mint: print.mint,
@@ -235,7 +271,8 @@ export function applyPrint(book, print, sleeves) {
   }
 
   if (print.side !== "sell") {
-    const remaining = Math.max(0, (Number(sleeves?.[print.traderId]) || 0) - usedUsd(book, print.traderId));
+    ensureSleeveCash(book, sleeves);
+    const remaining = Math.max(0, Number(book.sleeveCash?.[print.traderId]) || 0);
     const slice = remaining * BUY_FRACTION;
     const cash = Math.max(0, book.cashUsd);
     const buyUsd = Math.min(slice, cash, remaining);
@@ -243,7 +280,7 @@ export function applyPrint(book, print, sleeves) {
       book.seen[id] = "small";
       pushLedger(book, {
         id,
-        ts: print.ts,
+        ts: eventStamp(print),
         traderId: print.traderId,
         traderName: print.traderName,
         mint: print.mint,
@@ -259,6 +296,7 @@ export function applyPrint(book, print, sleeves) {
       return { book, status: "small" };
     }
     const qty = buyUsd / price;
+    book.sleeveCash[print.traderId] = Math.max(0, remaining - buyUsd);
     const lots = positiveLots(book.lots[key]);
     lots.push({ qty, costUsd: buyUsd, entryUsd: price, symbol: print.symbol });
     book.lots[key] = lots;
@@ -279,7 +317,7 @@ export function applyPrint(book, print, sleeves) {
     });
     pushLedger(book, {
       id,
-      ts: print.ts,
+      ts: eventStamp(print),
       traderId: print.traderId,
       traderName: print.traderName,
       mint: print.mint,
@@ -291,6 +329,7 @@ export function applyPrint(book, print, sleeves) {
       outcome: "opened",
       realizedUsd: 0,
       usd: buyUsd,
+      qty,
     });
     return { book, status: "buy" };
   }
@@ -300,7 +339,7 @@ export function applyPrint(book, print, sleeves) {
   if (!closed) {
     pushLedger(book, {
       id,
-      ts: print.ts,
+      ts: eventStamp(print),
       traderId: print.traderId,
       traderName: print.traderName,
       mint: print.mint,
@@ -318,6 +357,7 @@ export function applyPrint(book, print, sleeves) {
 }
 
 export function applyPrints(book, prints, sleeves) {
+  ensureSleeveCash(book, sleeves);
   const ordered = [...prints].sort((a, b) => String(a.ts).localeCompare(String(b.ts)) || String(a.id).localeCompare(String(b.id)));
   const counts = { buy: 0, sell: 0, small: 0, duplicate: 0, flat: 0, skip: 0 };
   for (const print of ordered) {
@@ -367,6 +407,7 @@ function copyBook(book, next) {
   book.seen = next.seen;
   book.trades = next.trades;
   book.ledger = next.ledger;
+  book.sleeveCash = next.sleeveCash || null;
   return book;
 }
 
