@@ -1,4 +1,4 @@
-import { LIVE_MODE, STARTING_CASH, alignUsdPrice, emptyBook, sleeveEquity, snapshot } from "./paper.js";
+import { LIVE_MODE, STARTING_CASH, emptyBook, exitPrice, sleeveEquity, snapshot } from "./paper.js";
 import { formatCentral } from "./time.js";
 
 function dropLocalBooks() {
@@ -81,7 +81,8 @@ function liveVsEntry(line, marks) {
   const entry = Number(line.entryUsd);
   const quoted = Number(marks?.[line.mint]);
   if (!(entry > 0) || !(quoted > 0)) return null;
-  const mark = alignUsdPrice(quoted, entry);
+  const mark = exitPrice(quoted, entry);
+  if (mark == null) return null;
   const qty = Number(line.qty) > 0 ? Number(line.qty) : Number(line.usd) > 0 ? Number(line.usd) / entry : 0;
   if (!(mark > 0) || !(qty > 0)) return null;
   return (mark - entry) * qty;

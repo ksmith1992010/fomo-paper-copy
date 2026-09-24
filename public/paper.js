@@ -74,12 +74,44 @@ export function alignUsdPrice(quote, human) {
   const ratio = dex / basis;
   if (!(ratio > 0)) return dex;
   const exp = Math.round(Math.log10(ratio));
-  // A 10× or 100× quote is a real mark. A few-thousand-times gap is not a rally.
+  // A 10× or 100× quote is a real mark.
   if (Math.abs(exp) < 3) return dex;
+  // A few-thousand-times gap is not a rally and not a stop. Do not rescale it into a fake move.
+  if (Math.abs(exp) < 6) return basis;
   const scaled = dex / 10 ** exp;
   const check = scaled / basis;
   if (check >= 0.25 && check <= 4) return scaled;
   return basis;
+}
+
+/**
+ * Price a close may use. A quote over 100× entry or under 1/100 is ignored
+ * unless it is a 10^6-or-more decimal shift, in which case the aligned mark is used.
+ */
+export function exitPrice(quote, entry) {
+  const raw = Number(quote);
+  const basis = Number(entry);
+  if (!(raw > 0) || !(basis > 0)) return null;
+  const ratio = raw / basis;
+  if (ratio > 100 || ratio < 0.01) {
+    const exp = Math.abs(Math.round(Math.log10(ratio)));
+    if (exp < 6) return null;
+  }
+  const mark = alignUsdPrice(raw, basis);
+  if (!(mark > 0)) return null;
+  const aligned = mark / basis;
+  if (aligned > 100 || aligned < 0.01) return null;
+  if ((ratio > 100 || ratio < 0.01) && Math.abs(mark - raw) <= Math.abs(raw) * 1e-9) return null;
+  return mark;
+}
+
+function lotEntry(lot) {
+  const entry = Number(lot?.entryUsd);
+  if (entry > 0) return entry;
+  const qty = Number(lot?.qty);
+  const cost = Number(lot?.costUsd);
+  if (qty > 0 && cost > 0) return cost / qty;
+  return 0;
 }
 
 function lotKey(traderId, mint) {
@@ -141,9 +173,22 @@ function closeHeld(book, key, price, print, onlyLots) {
   const heldLots = positiveLots(onlyLots || all).filter((lot) => all.includes(lot));
   const heldQty = heldLots.reduce((sum, lot) => sum + Number(lot.qty), 0);
   if (!(heldQty > 0) || !(Number(price) > 0)) return null;
-  const requested = Number(print.closeQty);
-  const qty = Math.min(heldQty, requested > 0 ? requested : heldQty);
-  if (!(qty > 0)) return null;
+  let qty = heldQty;
+  if (print.closeQty != null) {
+    const requested = Number(print.closeQty);
+    if (!Number.isFinite(requested) || !(requested > 0)) return null;
+    qty = Math.min(heldQty, requested);
+  }
+  if (!(qty > 0) || qty > heldQty + 1e-9) return null;
+
+  let fillPrice = null;
+  for (const lot of heldLots) {
+    const mark = exitPrice(price, lotEntry(lot));
+    if (mark == null) return null;
+    if (fillPrice == null) fillPrice = mark;
+    else if (Math.abs(fillPrice - mark) / mark > 1e-4) return null;
+  }
+  if (!(fillPrice > 0)) return null;
 
   let left = qty;
   let cost = 0;
@@ -168,8 +213,9 @@ function closeHeld(book, key, price, print, onlyLots) {
   else delete book.lots[key];
 
   const filled = qty - Math.max(0, left);
-  if (!(filled > 0)) return null;
-  const proceeds = filled * Number(price);
+  const proceeds = filled * fillPrice;
+  const realizedUsd = proceeds - cost;
+  if (!(filled > 0) || filled > heldQty + 1e-8 || !Number.isFinite(realizedUsd)) return null;
   book.cashUsd += proceeds;
   creditSleeve(book, print.traderId, proceeds);
   const trade = {
@@ -182,8 +228,9 @@ function closeHeld(book, key, price, print, onlyLots) {
     symbol: print.symbol || used[0]?.symbol,
     qty: filled,
     usd: proceeds,
-    priceUsd: Number(price),
-    realizedUsd: proceeds - cost,
+    priceUsd: fillPrice,
+    entryUsd: filled > 0 ? cost / filled : null,
+    realizedUsd,
     reason: print.reason || "sell",
   };
   book.trades.push(trade);
@@ -197,7 +244,7 @@ function closeHeld(book, key, price, print, onlyLots) {
     side: "sell",
     why: whyFor(print.reason || "sell"),
     entryUsd: filled > 0 ? cost / filled : null,
-    exitUsd: Number(price),
+    exitUsd: fillPrice,
     outcome: "closed",
     realizedUsd: trade.realizedUsd,
     usd: proceeds,
@@ -370,9 +417,9 @@ export function applyPrint(book, print, sleeves) {
     return { book, status: "buy" };
   }
 
-  const closed = closeHeld(book, key, price, { ...print, reason: "sell" });
-  book.seen[id] = closed ? "sell" : "flat";
-  if (!closed) {
+  const lots = positiveLots(book.lots[key] || []);
+  if (!lots.length) {
+    book.seen[id] = "flat";
     pushLedger(book, {
       id,
       ts: eventStamp(print),
@@ -388,8 +435,47 @@ export function applyPrint(book, print, sleeves) {
       realizedUsd: 0,
       usd: 0,
     });
+    return { book, status: "flat" };
   }
-  return { book, status: closed ? "sell" : "flat" };
+  if (print.closeQty != null && !(Number.isFinite(Number(print.closeQty)) && Number(print.closeQty) > 0)) {
+    book.seen[id] = "skip";
+    pushLedger(book, {
+      id,
+      ts: eventStamp(print),
+      traderId: print.traderId,
+      traderName: print.traderName,
+      mint: print.mint,
+      symbol: print.symbol,
+      side: "sell",
+      why: "Sell quantity is missing",
+      entryUsd: null,
+      exitUsd: null,
+      outcome: "skipped",
+      realizedUsd: 0,
+      usd: 0,
+    });
+    return { book, status: "skip" };
+  }
+  const closed = closeHeld(book, key, price, { ...print, reason: "sell" });
+  book.seen[id] = closed ? "sell" : "skip";
+  if (!closed) {
+    pushLedger(book, {
+      id,
+      ts: eventStamp(print),
+      traderId: print.traderId,
+      traderName: print.traderName,
+      mint: print.mint,
+      symbol: print.symbol,
+      side: "sell",
+      why: "Exit price is off the entry scale",
+      entryUsd: null,
+      exitUsd: null,
+      outcome: "skipped",
+      realizedUsd: 0,
+      usd: 0,
+    });
+  }
+  return { book, status: closed ? "sell" : "skip" };
 }
 
 export function applyPrints(book, prints, sleeves) {
@@ -415,10 +501,8 @@ export function closeOnMarks(book, dexMarks, ts) {
       if (!(Number(lot.qty) > 1e-10)) continue;
       const entry = Number(lot.entryUsd);
       if (!(entry > 0)) continue;
-      const ratio = raw / entry;
-      if (ratio > 100 || ratio < 0.01) continue;
-      const mark = alignUsdPrice(raw, entry);
-      if (!(mark > 0) || mark / entry > 100 || mark / entry < 0.01) continue;
+      const mark = exitPrice(raw, entry);
+      if (mark == null) continue;
       let reason = "";
       let closeQty = Number(lot.qty);
       if (mark <= entry * (1 - STOP_LOSS)) reason = "stop";
@@ -509,7 +593,7 @@ export function positions(book, marks) {
     if (qty <= 1e-10) continue;
     const entry = costUsd / qty;
     const quoted = Number(marks?.[mint]);
-    const mark = quoted > 0 ? alignUsdPrice(quoted, entry) : null;
+    const mark = quoted > 0 ? exitPrice(quoted, entry) : null;
     const unrealizedUsd = mark == null ? null : lots.reduce((sum, lot) => {
       const lotEntry = Number(lot.entryUsd) > 0 ? Number(lot.entryUsd) : entry;
       return sum + (mark - lotEntry) * Number(lot.qty);

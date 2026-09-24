@@ -593,3 +593,139 @@ test("each sleeve history keeps the newest 50 rows and does not clear the book",
   assert.equal(book.history.ada.at(-1).symbol, "T59");
   assert.equal(book.lots && Object.keys(book.lots).length, 0);
 });
+
+test("a shifted double or triple closes at the aligned mark and the realized P&L matches the cost", () => {
+  const book = emptyBook();
+  const entry = 10;
+  applyPrint(book, {
+    id: "buy",
+    ts: "2026-09-24T00:00:00Z",
+    traderId: "wallet",
+    side: "buy",
+    mint: "Mint111",
+    symbol: "AAA",
+    priceUsd: entry,
+  }, { wallet: 250 });
+  const openedQty = book.lots["wallet|Mint111"][0].qty;
+  const openedCost = book.lots["wallet|Mint111"][0].costUsd;
+  const half = closeOnMarks(book, { Mint111: entry * 2 * 1e6 }, "2026-09-24T00:01:00Z");
+  assert.equal(half.length, 1);
+  assert.equal(half[0].reason, "half");
+  assert.ok(Math.abs(half[0].priceUsd - entry * 2) / entry < 1e-6);
+  assert.ok(half[0].priceUsd < entry * 100);
+  assert.ok(Math.abs(half[0].qty - openedQty / 2) < 1e-8);
+  assert.ok(Math.abs(half[0].usd - half[0].priceUsd * half[0].qty) < 1e-6);
+  assert.ok(Math.abs(half[0].realizedUsd - (half[0].usd - openedCost / 2)) < 1e-6);
+
+  const runner = closeOnMarks(book, { Mint111: entry * 3 * 1e6 }, "2026-09-24T00:02:00Z");
+  assert.equal(runner.length, 1);
+  assert.equal(runner[0].reason, "runner");
+  assert.ok(Math.abs(runner[0].priceUsd - entry * 3) / entry < 1e-6);
+  assert.ok(runner[0].priceUsd < entry * 100);
+  assert.ok(Math.abs(runner[0].realizedUsd - (runner[0].usd - openedCost / 2)) < 1e-6);
+  assert.equal(book.lots["wallet|Mint111"], undefined);
+});
+
+test("a leader sell keeps a real 10× price and drops a print on another scale", () => {
+  const sleeves = { wallet: 250 };
+  const buy = {
+    id: "buy",
+    ts: "2026-09-24T00:00:00Z",
+    traderId: "wallet",
+    side: "buy",
+    mint: "Mint111",
+    symbol: "AAA",
+    priceUsd: 10,
+  };
+  const blown = emptyBook();
+  applyPrint(blown, buy, sleeves);
+  const cash = blown.cashUsd;
+  const qty = blown.lots["wallet|Mint111"][0].qty;
+  const cooked = alignUsdPrice(10 * 4900, 10);
+  assert.ok(Math.abs(cooked - 10) / 10 < 1e-9);
+  assert.equal(closeOnMarks(blown, { Mint111: 10 * 4900 }, "2026-09-24T00:01:00Z").length, 0);
+  assert.equal(closeOnMarks(blown, { Mint111: cooked }, "2026-09-24T00:01:30Z").length, 0);
+  const skipped = applyPrint(blown, {
+    id: "sell-blown",
+    ts: "2026-09-24T00:02:00Z",
+    traderId: "wallet",
+    side: "sell",
+    mint: "Mint111",
+    symbol: "AAA",
+    priceUsd: 10 * 4900,
+  }, sleeves);
+  assert.equal(skipped.status, "skip");
+  assert.equal(blown.trades.filter((trade) => trade.side === "sell").length, 0);
+  assert.equal(blown.cashUsd, cash);
+  assert.ok(Math.abs(blown.lots["wallet|Mint111"][0].qty - qty) < 1e-9);
+  assert.equal(blown.ledger.at(-1).why, "Exit price is off the entry scale");
+
+  const ten = emptyBook();
+  applyPrint(ten, { ...buy, id: "buy-10" }, sleeves);
+  const heldQty = ten.lots["wallet|Mint111"][0].qty;
+  const heldCost = ten.lots["wallet|Mint111"][0].costUsd;
+  const sold = applyPrint(ten, {
+    id: "sell-10",
+    ts: "2026-09-24T00:01:00Z",
+    traderId: "wallet",
+    side: "sell",
+    mint: "Mint111",
+    symbol: "AAA",
+    priceUsd: 100,
+  }, sleeves);
+  assert.equal(sold.status, "sell");
+  const trade = ten.trades.at(-1);
+  assert.ok(Math.abs(trade.priceUsd - 100) < 1e-9);
+  assert.ok(Math.abs(trade.qty - heldQty) < 1e-8);
+  assert.ok(Math.abs(trade.realizedUsd - (trade.usd - heldCost)) < 1e-6);
+
+  const shifted = emptyBook();
+  applyPrint(shifted, { ...buy, id: "buy-shift" }, sleeves);
+  const basisCost = shifted.lots["wallet|Mint111"][0].costUsd;
+  const aligned = applyPrint(shifted, {
+    id: "sell-shift",
+    ts: "2026-09-24T00:01:00Z",
+    traderId: "wallet",
+    side: "sell",
+    mint: "Mint111",
+    symbol: "AAA",
+    priceUsd: 20 * 1e6,
+  }, sleeves);
+  assert.equal(aligned.status, "sell");
+  const fill = shifted.trades.at(-1);
+  assert.ok(Math.abs(fill.priceUsd - 20) < 1e-6);
+  assert.ok(Math.abs(fill.realizedUsd - (fill.usd - basisCost)) < 1e-6);
+  assert.ok(fill.priceUsd < 1000);
+});
+
+test("a sell with a missing quantity does not close the lot", () => {
+  const book = emptyBook();
+  applyPrint(book, {
+    id: "buy",
+    ts: "2026-09-24T00:00:00Z",
+    traderId: "wallet",
+    side: "buy",
+    mint: "Mint111",
+    symbol: "AAA",
+    priceUsd: 10,
+  }, { wallet: 250 });
+  const cash = book.cashUsd;
+  const qty = book.lots["wallet|Mint111"][0].qty;
+  for (const [id, closeQty] of [["nan", Number.NaN], ["zero", 0]]) {
+    const result = applyPrint(book, {
+      id,
+      ts: "2026-09-24T00:01:00Z",
+      traderId: "wallet",
+      side: "sell",
+      mint: "Mint111",
+      symbol: "AAA",
+      priceUsd: 12,
+      closeQty,
+    }, { wallet: 250 });
+    assert.equal(result.status, "skip");
+    assert.equal(book.ledger.at(-1).why, "Sell quantity is missing");
+  }
+  assert.equal(book.trades.filter((trade) => trade.side === "sell").length, 0);
+  assert.equal(book.cashUsd, cash);
+  assert.ok(Math.abs(book.lots["wallet|Mint111"][0].qty - qty) < 1e-9);
+});
