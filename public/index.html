@@ -3,25 +3,27 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Paper copy trader</title>
+  <title>Paper copy · Jarvis deck</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <div class="scan" aria-hidden="true"></div>
   <main>
     <header>
       <div>
-        <h1>Paper copy trader</h1>
-        <p id="source">Loading the public tape…</p>
+        <p class="kicker">Paper copy · command deck</p>
+        <h1>Jarvis</h1>
+        <p id="source">Acquiring the board…</p>
       </div>
       <button id="refresh" type="button">Refresh</button>
     </header>
     <div id="banner"></div>
     <section class="stats" id="stats"></section>
     <section class="grid" id="traders"></section>
-    <h2>Mirrored paper trades</h2>
-    <div id="trades"></div>
-    <h2>Open paper positions</h2>
-    <div id="positions"></div>
+    <h2>Trade tape</h2>
+    <div class="panel" id="trades"></div>
+    <h2>Open positions</h2>
+    <div class="panel" id="positions"></div>
     <footer id="foot"></footer>
   </main>
   <script type="module" src="/app.js"></script>

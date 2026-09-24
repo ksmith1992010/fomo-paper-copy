@@ -112,6 +112,9 @@ function snapshot(book, marks) {
 }
 
 function cls(n) { return n >= 0 ? "up" : "down"; }
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+}
 
 function render(feed, book) {
   const view = snapshot(book, feed.marks || {});
@@ -122,20 +125,21 @@ function render(feed, book) {
   document.querySelector("#stats").innerHTML = `
     <div><span>Cash</span><strong>${money.format(view.cashUsd)}</strong></div>
     <div><span>Equity</span><strong>${money.format(view.equityUsd)}</strong></div>
-    <div><span>P&L</span><strong class="${cls(view.pnlUsd)}">${money.format(view.pnlUsd)}</strong></div>
+    <div><span>Total P&L</span><strong class="${cls(view.pnlUsd)}">${money.format(view.pnlUsd)}</strong></div>
     <div><span>Realized</span><strong class="${cls(view.realizedUsd)}">${money.format(view.realizedUsd)}</strong></div>`;
   const traders = feed.traders || [];
   document.querySelector("#traders").innerHTML = traders.length ? traders.map((trader) => `
     <article class="card">
-      <div class="rank">#${trader.rank} ${trader.name}</div>
-      <p>${trader.pnlUsd ? money.format(trader.pnlUsd) + " PnL · " : ""}${money.format(trader.volumeUsd)} volume</p>
-      <ul class="activity">${(trader.recent || []).map((row) => `<li><span class="${row.side === "sell" ? "down" : "up"}">${row.side} ${row.symbol}</span><span>${money.format(row.usd)}</span></li>`).join("")}</ul>
-    </article>`).join("") : `<p class="empty">No traders on this tape.</p>`;
+      <div class="label">Rank ${esc(trader.rank)}</div>
+      <div class="handle">${esc(trader.name)}</div>
+      <div class="pnl ${cls(trader.pnlUsd || 0)}">${money.format(trader.pnlUsd || 0)} <span class="label">24h PnL</span></div>
+      <ul class="activity">${(trader.recent || []).map((row) => `<li><span class="${row.side === "sell" ? "down" : "up"}">${esc(row.side)} ${esc(row.symbol)}</span><span>${money.format(row.usd)}</span></li>`).join("")}</ul>
+    </article>`).join("") : `<p class="empty">No traders on this board.</p>`;
   document.querySelector("#trades").innerHTML = view.trades.length ? `<table><thead><tr><th>Side</th><th>Token</th><th>From</th><th>Paper</th><th>P&L</th></tr></thead><tbody>
-    ${view.trades.slice(0, 40).map((trade) => `<tr><td class="${trade.side === "sell" ? "down" : "up"}">${trade.side}</td><td>${trade.symbol}</td><td>${trade.traderName || String(trade.traderId).slice(0, 8)}</td><td>${money.format(trade.usd)}</td><td class="${cls(trade.realizedUsd || 0)}">${trade.side === "sell" ? money.format(trade.realizedUsd || 0) : ""}</td></tr>`).join("")}
+    ${view.trades.slice(0, 40).map((trade) => `<tr><td class="${trade.side === "sell" ? "down" : "up"}">${esc(trade.side)}</td><td>${esc(trade.symbol)}</td><td>${esc(trade.traderName || String(trade.traderId).slice(0, 8))}</td><td>${money.format(trade.usd)}</td><td class="${cls(trade.realizedUsd || 0)}">${trade.side === "sell" ? money.format(trade.realizedUsd || 0) : ""}</td></tr>`).join("")}
   </tbody></table>` : `<p class="empty">No mirrored trades yet.</p>`;
   document.querySelector("#positions").innerHTML = view.positions.length ? `<table><thead><tr><th>Token</th><th>Qty</th><th>Value</th><th>Unrealized</th></tr></thead><tbody>
-    ${view.positions.map((row) => `<tr><td>${row.symbol}</td><td>${qtyFmt.format(row.qty)}</td><td>${money.format(row.valueUsd)}</td><td class="${cls(row.unrealizedUsd)}">${money.format(row.unrealizedUsd)}</td></tr>`).join("")}
+    ${view.positions.map((row) => `<tr><td>${esc(row.symbol)}</td><td>${qtyFmt.format(row.qty)}</td><td>${money.format(row.valueUsd)}</td><td class="${cls(row.unrealizedUsd)}">${money.format(row.unrealizedUsd)}</td></tr>`).join("")}
   </tbody></table>` : `<p class="empty">No open paper positions.</p>`;
   const worked = (feed.routes || []).filter((route) => route.ok).map((route) => route.url.split("?")[0]);
   document.querySelector("#foot").textContent = worked.length ? `Live routes: ${[...new Set(worked)].join(" · ")}` : "No upstream route succeeded on the last refresh.";
