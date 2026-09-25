@@ -84,7 +84,7 @@ test("a buy is 8% of the remaining sleeve and skips under $5", () => {
   assert.equal(tiny.trades.length, 0);
 });
 
-test("DexScreener +100% and -15% close the lot and realize P&L", () => {
+test("DexScreener +20% and -15% close the whole lot and realize P&L", () => {
   const book = emptyBook();
   applyPrint(book, {
     id: "buy",
@@ -95,22 +95,16 @@ test("DexScreener +100% and -15% close the lot and realize P&L", () => {
     symbol: "AAA",
     priceUsd: 10,
   }, { wallet: 250 });
-  assert.equal(closeOnMarks(book, { Mint111: 19.9 }, "2026-09-24T00:02:00Z").length, 0);
+  assert.equal(closeOnMarks(book, { Mint111: 11.99 }, "2026-09-24T00:02:00Z").length, 0);
 
   const opened = book.lots["wallet|Mint111"][0].qty;
-  const target = closeOnMarks(book, { Mint111: 20 }, "2026-09-24T00:03:00Z");
+  const target = closeOnMarks(book, { Mint111: 12 }, "2026-09-24T00:03:00Z");
   assert.equal(target.length, 1);
-  assert.equal(target[0].reason, "half");
-  assert.ok(Math.abs(target[0].qty - opened / 2) < 1e-9);
+  assert.equal(target[0].reason, "target");
+  assert.ok(Math.abs(target[0].qty - opened) < 1e-9);
   assert.ok(target[0].realizedUsd > 0);
-  assert.ok(Math.abs(book.lots["wallet|Mint111"][0].qty - opened / 2) < 1e-9);
-  assert.equal(book.lots["wallet|Mint111"][0].halfSold, true);
-  assert.equal(closeOnMarks(book, { Mint111: 20 }, "2026-09-24T00:04:00Z").length, 0);
-
-  const runner = closeOnMarks(book, { Mint111: 30 }, "2026-09-24T00:05:00Z");
-  assert.equal(runner.length, 1);
-  assert.equal(runner[0].reason, "runner");
   assert.equal(book.lots["wallet|Mint111"], undefined);
+  assert.equal(closeOnMarks(book, { Mint111: 100 }, "2026-09-24T00:04:00Z").length, 0);
 
   const stopped = emptyBook();
   applyPrint(stopped, {
@@ -124,11 +118,13 @@ test("DexScreener +100% and -15% close the lot and realize P&L", () => {
   }, { wallet: 250 });
   const stop = closeOnMarks(stopped, { Mint111: 8.5 }, "2026-09-24T00:03:00Z");
   assert.equal(stop[0].reason, "stop");
+  assert.ok(Math.abs(stop[0].qty - opened) < 1e-9);
   assert.ok(stop[0].realizedUsd < 0);
+  assert.equal(stopped.lots["wallet|Mint111"], undefined);
   assert.equal(closeOnMarks(stopped, {}, "2026-09-24T00:04:00Z").length, 0);
 });
 
-test("the half that remains closes on a leader sell, at +200%, or on the stop", () => {
+test("a leader sell closes the whole open lot, and a taken profit leaves nothing to ride", () => {
   const sleeves = { wallet: 250 };
   const buy = {
     id: "buy",
@@ -142,7 +138,9 @@ test("the half that remains closes on a leader sell, at +200%, or on the stop", 
   const book = emptyBook();
   applyPrint(book, buy, sleeves);
   const qty = book.lots["wallet|Mint111"][0].qty;
-  closeOnMarks(book, { Mint111: 20 }, "2026-09-24T00:01:00Z");
+  const target = closeOnMarks(book, { Mint111: 12 }, "2026-09-24T00:01:00Z");
+  assert.equal(target[0].reason, "target");
+  assert.ok(Math.abs(target[0].qty - qty) < 1e-9);
   const sold = applyPrint(book, {
     id: "leader-sell",
     ts: "2026-09-24T00:02:00Z",
@@ -152,17 +150,23 @@ test("the half that remains closes on a leader sell, at +200%, or on the stop", 
     symbol: "AAA",
     priceUsd: 22,
   }, sleeves);
-  assert.equal(sold.status, "sell");
-  assert.ok(Math.abs(book.trades.at(-1).qty - qty / 2) < 1e-9);
+  assert.equal(sold.status, "flat");
   assert.equal(book.lots["wallet|Mint111"], undefined);
 
-  const stopped = emptyBook();
-  applyPrint(stopped, { ...buy, id: "buy-2" }, sleeves);
-  closeOnMarks(stopped, { Mint111: 20 }, "2026-09-24T00:01:00Z");
-  const stop = closeOnMarks(stopped, { Mint111: 8.5 }, "2026-09-24T00:02:00Z");
-  assert.equal(stop[0].reason, "stop");
-  assert.ok(Math.abs(stop[0].qty - qty / 2) < 1e-9);
-  assert.equal(stopped.lots["wallet|Mint111"], undefined);
+  const held = emptyBook();
+  applyPrint(held, { ...buy, id: "buy-2" }, sleeves);
+  const leader = applyPrint(held, {
+    id: "leader-before-target",
+    ts: "2026-09-24T00:01:00Z",
+    traderId: "wallet",
+    side: "sell",
+    mint: "Mint111",
+    symbol: "AAA",
+    priceUsd: 11,
+  }, sleeves);
+  assert.equal(leader.status, "sell");
+  assert.ok(Math.abs(held.trades.at(-1).qty - qty) < 1e-9);
+  assert.equal(held.lots["wallet|Mint111"], undefined);
 });
 
 test("a FOMO sell closes that trader's lot and duplicates are ignored", () => {
@@ -364,7 +368,8 @@ test("a decimal-shifted mark does not invent P&L, and a real move does", () => {
 
   const ten = closeOnMarks(book, { Mint111: entry * 10 }, "2026-09-24T00:03:00Z");
   assert.equal(ten.length, 1);
-  assert.equal(ten[0].reason, "runner");
+  assert.equal(ten[0].reason, "target");
+  assert.ok(Math.abs(ten[0].qty - qty) < 1e-8);
   assert.ok(Math.abs(ten[0].priceUsd - entry * 10) / entry < 1e-6);
   assert.equal(book.lots["wallet|Mint111"], undefined);
 });
@@ -594,7 +599,7 @@ test("each sleeve history keeps the newest 50 rows and does not clear the book",
   assert.equal(book.lots && Object.keys(book.lots).length, 0);
 });
 
-test("a shifted double or triple closes at the aligned mark and the realized P&L matches the cost", () => {
+test("a shifted double closes the whole lot at the aligned mark and the realized P&L matches the cost", () => {
   const book = emptyBook();
   const entry = 10;
   applyPrint(book, {
@@ -608,21 +613,15 @@ test("a shifted double or triple closes at the aligned mark and the realized P&L
   }, { wallet: 250 });
   const openedQty = book.lots["wallet|Mint111"][0].qty;
   const openedCost = book.lots["wallet|Mint111"][0].costUsd;
-  const half = closeOnMarks(book, { Mint111: entry * 2 * 1e6 }, "2026-09-24T00:01:00Z");
-  assert.equal(half.length, 1);
-  assert.equal(half[0].reason, "half");
-  assert.ok(Math.abs(half[0].priceUsd - entry * 2) / entry < 1e-6);
-  assert.ok(half[0].priceUsd < entry * 100);
-  assert.ok(Math.abs(half[0].qty - openedQty / 2) < 1e-8);
-  assert.ok(Math.abs(half[0].usd - half[0].priceUsd * half[0].qty) < 1e-6);
-  assert.ok(Math.abs(half[0].realizedUsd - (half[0].usd - openedCost / 2)) < 1e-6);
-
-  const runner = closeOnMarks(book, { Mint111: entry * 3 * 1e6 }, "2026-09-24T00:02:00Z");
-  assert.equal(runner.length, 1);
-  assert.equal(runner[0].reason, "runner");
-  assert.ok(Math.abs(runner[0].priceUsd - entry * 3) / entry < 1e-6);
-  assert.ok(runner[0].priceUsd < entry * 100);
-  assert.ok(Math.abs(runner[0].realizedUsd - (runner[0].usd - openedCost / 2)) < 1e-6);
+  const closed = closeOnMarks(book, { Mint111: entry * 2 * 1e6 }, "2026-09-24T00:01:00Z");
+  assert.equal(closed.length, 1);
+  assert.equal(closed[0].reason, "target");
+  assert.ok(Math.abs(closed[0].priceUsd - entry * 2) / entry < 1e-6);
+  assert.ok(closed[0].priceUsd < entry * 100);
+  assert.ok(Math.abs(closed[0].qty - openedQty) < 1e-8);
+  assert.ok(Math.abs(closed[0].usd - closed[0].priceUsd * closed[0].qty) < 1e-6);
+  assert.ok(Math.abs(closed[0].realizedUsd - (closed[0].usd - openedCost)) < 1e-6);
+  assert.equal(closeOnMarks(book, { Mint111: entry * 10 }, "2026-09-24T00:02:00Z").length, 0);
   assert.equal(book.lots["wallet|Mint111"], undefined);
 });
 

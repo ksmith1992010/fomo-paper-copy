@@ -16,8 +16,7 @@ export const SLEEVE_FLOOR = 0.15;
 export const SLEEVE_CAP = 0.5;
 export const BUY_FRACTION = 0.08;
 export const MIN_BUY_USD = 5;
-export const TAKE_PROFIT = 1;
-export const RUNNER = 2;
+export const TAKE_PROFIT = 0.2;
 export const STOP_LOSS = 0.15;
 
 export function emptyBook() {
@@ -253,8 +252,7 @@ function closeHeld(book, key, price, print, onlyLots) {
 }
 
 function whyFor(reason) {
-  if (reason === "half") return "DexScreener mark is 100% above entry; sold half";
-  if (reason === "runner") return "DexScreener mark is 200% above entry";
+  if (reason === "target") return "DexScreener mark is 20% above entry";
   if (reason === "stop") return "DexScreener mark is 15% below entry";
   return "Leader sold a coin this sleeve holds";
 }
@@ -489,7 +487,7 @@ export function applyPrints(book, prints, sleeves) {
   return { book, counts };
 }
 
-/** At +100% sell half. The rest closes at +200%, on a leader sell, or on the −15% stop. A quote beyond 100× entry is skipped. */
+/** At +20% sell the whole remaining quantity. A −15% stop does the same. A quote beyond 100× entry is skipped. */
 export function closeOnMarks(book, dexMarks, ts) {
   const closed = [];
   const when = ts || new Date().toISOString();
@@ -504,13 +502,8 @@ export function closeOnMarks(book, dexMarks, ts) {
       const mark = exitPrice(raw, entry);
       if (mark == null) continue;
       let reason = "";
-      let closeQty = Number(lot.qty);
       if (mark <= entry * (1 - STOP_LOSS)) reason = "stop";
-      else if (mark >= entry * (1 + RUNNER)) reason = "runner";
-      else if (!lot.halfSold && mark >= entry * (1 + TAKE_PROFIT)) {
-        reason = "half";
-        closeQty = Number(lot.qty) / 2;
-      }
+      else if (mark >= entry * (1 + TAKE_PROFIT)) reason = "target";
       if (!reason) continue;
       const before = Number(lot.qty);
       const trade = closeHeld(book, key, mark, {
@@ -520,9 +513,8 @@ export function closeOnMarks(book, dexMarks, ts) {
         mint,
         symbol: lot.symbol,
         reason,
-        closeQty,
+        closeQty: before,
       }, [lot]);
-      if (reason === "half" && Number(lot.qty) > 1e-10) lot.halfSold = true;
       if (trade) closed.push(trade);
     }
   }
