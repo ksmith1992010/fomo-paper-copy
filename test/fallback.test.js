@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isSolanaAddress, snapshotBanner, snapshotFromBoard } from "../lib/board-snapshot.js";
-import { loadFeed } from "../lib/feed.js";
+import { loadFeed, printsFromTrades } from "../lib/feed.js";
 import { LIVE_MODE } from "../lib/paper.js";
 import { swapFromTransaction } from "../lib/solana-swaps.js";
 
@@ -60,6 +60,77 @@ test("a public swap is a buy or sell only when a token balance changes", () => {
     transaction: { message: { accountKeys: [{ pubkey: WALLET }] } },
   }, WALLET, 100);
   assert.equal(transfer, null);
+
+  const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const partial = swapFromTransaction({
+    meta: {
+      fee: 5000,
+      preBalances: [1_000_000_000],
+      postBalances: [999_995_000],
+      preTokenBalances: [
+        { owner: WALLET, mint: MINT, uiTokenAmount: { uiAmountString: "10" } },
+        { owner: WALLET, mint: USDC, uiTokenAmount: { uiAmountString: "0" } },
+      ],
+      postTokenBalances: [
+        { owner: WALLET, mint: MINT, uiTokenAmount: { uiAmountString: "6" } },
+        { owner: WALLET, mint: USDC, uiTokenAmount: { uiAmountString: "4" } },
+      ],
+    },
+    transaction: { message: { accountKeys: [{ pubkey: WALLET }] } },
+  }, WALLET, 100);
+  assert.equal(partial.side, "sell");
+  assert.ok(Math.abs(partial.exitFraction - 0.4) < 1e-9);
+  assert.equal(partial.heldQty, 10);
+  assert.equal(partial.soldQty, 4);
+
+  const exited = swapFromTransaction({
+    meta: {
+      fee: 5000,
+      preBalances: [1_000_000_000],
+      postBalances: [999_995_000],
+      preTokenBalances: [
+        { owner: WALLET, mint: MINT, uiTokenAmount: { uiAmountString: "10" } },
+        { owner: WALLET, mint: USDC, uiTokenAmount: { uiAmountString: "0" } },
+      ],
+      postTokenBalances: [
+        { owner: WALLET, mint: USDC, uiTokenAmount: { uiAmountString: "8" } },
+      ],
+    },
+    transaction: { message: { accountKeys: [{ pubkey: WALLET }] } },
+  }, WALLET, 100);
+  assert.equal(exited.side, "sell");
+  assert.equal(exited.exitFraction, 1);
+});
+
+test("a FOMO sell copies the fraction sold, and a closed position is a full exit", () => {
+  const partial = printsFromTrades(USER, {
+    trades: [{
+      tradeId: "t1",
+      createdAt: "2026-09-24T00:00:00Z",
+      token: { address: MINT, symbol: "AAA" },
+      boughtAmount: 100,
+      soldAmount: 40,
+      avgEntryPrice: 2,
+      avgExitPrice: 3,
+    }],
+  }).find((print) => print.side === "sell");
+  assert.equal(partial.exitFraction, 0.4);
+  assert.equal(partial.positionId, "t1");
+  assert.equal(partial.priceUsd, 3);
+
+  const full = printsFromTrades(USER, {
+    trades: [{
+      tradeId: "t2",
+      createdAt: "2026-09-24T00:00:00Z",
+      closedAt: "2026-09-24T00:05:00Z",
+      token: { address: MINT, symbol: "AAA" },
+      boughtAmount: 100,
+      soldAmount: 100,
+      avgEntryPrice: 2,
+      avgExitPrice: 1,
+    }],
+  }).find((print) => print.side === "sell");
+  assert.equal(full.exitFraction, 1);
 });
 
 test("a 402 with no snapshot stays empty and does not invent traders", async () => {

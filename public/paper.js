@@ -16,8 +16,6 @@ export const SLEEVE_FLOOR = 0.15;
 export const SLEEVE_CAP = 0.5;
 export const BUY_FRACTION = 0.08;
 export const MIN_BUY_USD = 5;
-export const TAKE_PROFIT = 0.2;
-export const STOP_LOSS = 0.15;
 
 export function emptyBook() {
   return {
@@ -30,6 +28,7 @@ export function emptyBook() {
     ledger: [],
     history: {},
     sleeveCash: null,
+    exitCopied: {},
   };
 }
 
@@ -254,7 +253,42 @@ function closeHeld(book, key, price, print, onlyLots) {
 function whyFor(reason) {
   if (reason === "target") return "DexScreener mark is 20% above entry";
   if (reason === "stop") return "DexScreener mark is 15% below entry";
+  if (reason === "partial") return "Leader sold part of a coin this sleeve holds";
   return "Leader sold a coin this sleeve holds";
+}
+
+/** Cumulative fraction of the leader position this print says is sold. A bare sell is a full exit. */
+function leaderCumulative(print) {
+  const explicit = Number(print?.exitFraction);
+  if (explicit > 0) return Math.min(1, explicit);
+  const sold = Number(print?.soldQty);
+  const held = Number(print?.heldQty);
+  if (sold > 0 && held > 0) return Math.min(1, sold / held);
+  return 1;
+}
+
+function exitCopyKey(print) {
+  const id = String(print?.positionId || "");
+  if (!id || !print?.traderId) return "";
+  return `${print.traderId}|${id}`;
+}
+
+/** Fraction of our remaining quantity that matches the new part of their exit. */
+function sliceOfRemaining(book, print) {
+  const cumulative = leaderCumulative(print);
+  const key = exitCopyKey(print);
+  const prior = key && book.exitCopied ? Number(book.exitCopied[key]) || 0 : 0;
+  if (cumulative <= prior + 1e-9) return { slice: 0, cumulative };
+  const open = 1 - Math.min(1, prior);
+  if (!(open > 1e-9)) return { slice: 0, cumulative };
+  return { slice: Math.min(1, (cumulative - prior) / open), cumulative };
+}
+
+function rememberExit(book, print, cumulative) {
+  const key = exitCopyKey(print);
+  if (!key) return;
+  if (!book.exitCopied || typeof book.exitCopied !== "object" || Array.isArray(book.exitCopied)) book.exitCopied = {};
+  book.exitCopied[key] = Math.min(1, cumulative);
 }
 
 function eventStamp(print) {
@@ -435,7 +469,7 @@ export function applyPrint(book, print, sleeves) {
     });
     return { book, status: "flat" };
   }
-  if (print.closeQty != null && !(Number.isFinite(Number(print.closeQty)) && Number(print.closeQty) > 0)) {
+  if (print.closeQty != null && !(Number.isFinite(Number(print.closeQty)) && Number(print.closeQty) > 0) && !(Number(print.exitFraction) > 0) && !(Number(print.soldQty) > 0 && Number(print.heldQty) > 0)) {
     book.seen[id] = "skip";
     pushLedger(book, {
       id,
@@ -454,7 +488,19 @@ export function applyPrint(book, print, sleeves) {
     });
     return { book, status: "skip" };
   }
-  const closed = closeHeld(book, key, price, { ...print, reason: "sell" });
+  const heldQty = lots.reduce((sum, lot) => sum + Number(lot.qty), 0);
+  const { slice, cumulative } = sliceOfRemaining(book, print);
+  if (!(slice > 1e-8)) {
+    book.seen[id] = "duplicate";
+    return { book, status: "duplicate" };
+  }
+  const closeQty = slice >= 1 - 1e-9 ? heldQty : heldQty * slice;
+  const closed = closeHeld(book, key, price, {
+    ...print,
+    reason: slice >= 1 - 1e-9 ? "sell" : "partial",
+    closeQty,
+  });
+  if (closed) rememberExit(book, print, cumulative);
   book.seen[id] = closed ? "sell" : "skip";
   if (!closed) {
     pushLedger(book, {
@@ -487,38 +533,9 @@ export function applyPrints(book, prints, sleeves) {
   return { book, counts };
 }
 
-/** At +20% sell the whole remaining quantity. A −15% stop does the same. A quote beyond 100× entry is skipped. */
-export function closeOnMarks(book, dexMarks, ts) {
-  const closed = [];
-  const when = ts || new Date().toISOString();
-  for (const [key, lots] of Object.entries({ ...book.lots })) {
-    const [traderId, mint] = key.split("|");
-    const raw = Number(dexMarks?.[mint]);
-    if (!(raw > 0)) continue;
-    for (const lot of [...positiveLots(lots)]) {
-      if (!(Number(lot.qty) > 1e-10)) continue;
-      const entry = Number(lot.entryUsd);
-      if (!(entry > 0)) continue;
-      const mark = exitPrice(raw, entry);
-      if (mark == null) continue;
-      let reason = "";
-      if (mark <= entry * (1 - STOP_LOSS)) reason = "stop";
-      else if (mark >= entry * (1 + TAKE_PROFIT)) reason = "target";
-      if (!reason) continue;
-      const before = Number(lot.qty);
-      const trade = closeHeld(book, key, mark, {
-        id: `exit:${key}:${reason}:${entry}:${before}`,
-        ts: when,
-        traderId,
-        mint,
-        symbol: lot.symbol,
-        reason,
-        closeQty: before,
-      }, [lot]);
-      if (trade) closed.push(trade);
-    }
-  }
-  return closed;
+/** Marks do not close lots. A sell happens only when the copied wallet sells. */
+export function closeOnMarks() {
+  return [];
 }
 
 function copyBook(book, next) {
@@ -531,6 +548,7 @@ function copyBook(book, next) {
   book.ledger = next.ledger;
   book.history = next.history || {};
   book.sleeveCash = next.sleeveCash || null;
+  book.exitCopied = next.exitCopied || {};
   return book;
 }
 
