@@ -15,7 +15,7 @@ export function liveStatus() {
 export const SLEEVE_FLOOR = 0.15;
 export const SLEEVE_CAP = 0.5;
 export const BUY_FRACTION = 0.08;
-export const MIN_BUY_USD = 5;
+export const MIN_BUY_USD = 1;
 
 export function emptyBook() {
   return {
@@ -327,6 +327,40 @@ export function ensureSleeveCash(book, sleeves) {
   return cash;
 }
 
+/** Move sleeve cash that belongs to wallets no longer on the board. Open-lot cost stays on the lot. */
+export function parkIdleSleeves(book, sleeves) {
+  ensureSleeveCash(book, sleeves);
+  if (!book.sleeveCash) return null;
+  const active = Object.entries(sleeves || {}).filter(([, size]) => Number(size) > 0);
+  if (!active.length) return book.sleeveCash;
+  let idle = 0;
+  for (const id of Object.keys(book.sleeveCash)) {
+    if (active.some(([traderId]) => traderId === id)) continue;
+    idle += Math.max(0, Number(book.sleeveCash[id]) || 0);
+    delete book.sleeveCash[id];
+  }
+  if (!(idle > 0)) return book.sleeveCash;
+  const weight = active.reduce((sum, [, size]) => sum + Number(size), 0);
+  let left = idle;
+  active.forEach(([id, size], index) => {
+    const share = index === active.length - 1 ? left : idle * (Number(size) / weight);
+    left -= share;
+    book.sleeveCash[id] = Math.max(0, (Number(book.sleeveCash[id]) || 0) + share);
+  });
+  return book.sleeveCash;
+}
+
+/** Let a followed wallet retry a buy that was skipped only because its sleeve was empty. */
+function releaseUndersizedBuys(book, sleeves) {
+  const active = new Set(Object.keys(sleeves || {}));
+  if (!book.seen || !active.size) return;
+  for (const line of book.ledger || []) {
+    if (line?.side === "sell" || line?.outcome !== "skipped") continue;
+    if (!active.has(line.traderId)) continue;
+    if (book.seen[line.id] === "small") delete book.seen[line.id];
+  }
+}
+
 export function sleeveEquity(book, traderId, marks) {
   const cash = Math.max(0, Number(book.sleeveCash?.[traderId]) || 0);
   const marked = positions(book, marks)
@@ -401,7 +435,7 @@ export function applyPrint(book, print, sleeves) {
         mint: print.mint,
         symbol: print.symbol,
         side: "buy",
-        why: slice < MIN_BUY_USD || remaining < MIN_BUY_USD ? "Sleeve slice is under $5" : "Sleeve is spent or cash is short",
+        why: slice < MIN_BUY_USD || remaining < MIN_BUY_USD ? `Sleeve slice is under $${MIN_BUY_USD}` : "Sleeve is spent or cash is short",
         entryUsd: null,
         exitUsd: null,
         outcome: "skipped",
@@ -524,12 +558,15 @@ export function applyPrint(book, print, sleeves) {
 
 export function applyPrints(book, prints, sleeves) {
   ensureSleeveCash(book, sleeves);
+  parkIdleSleeves(book, sleeves);
+  releaseUndersizedBuys(book, sleeves);
   const ordered = [...prints].sort((a, b) => String(a.ts).localeCompare(String(b.ts)) || String(a.id).localeCompare(String(b.id)));
   const counts = { buy: 0, sell: 0, small: 0, duplicate: 0, flat: 0, skip: 0 };
   for (const print of ordered) {
     const result = applyPrint(book, print, sleeves);
     counts[result.status] = (counts[result.status] || 0) + 1;
   }
+  parkIdleSleeves(book, sleeves);
   return { book, counts };
 }
 

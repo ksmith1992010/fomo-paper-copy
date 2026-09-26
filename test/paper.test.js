@@ -14,6 +14,7 @@ import {
   sleeveSizes,
   snapshot,
   ensureSleeveCash,
+  parkIdleSleeves,
   sleeveEquity,
   positions,
   ensureWalletHistory,
@@ -39,7 +40,7 @@ test("a lopsided board still respects the floor and the cap", () => {
   assert.ok(Math.abs(sizes.reduce((total, size) => total + size, 0) - 1_000) < 1e-6);
 });
 
-test("a buy is 8% of the remaining sleeve and skips under $5", () => {
+test("a buy is 8% of the remaining sleeve and skips under $1", () => {
   const book = emptyBook();
   const sleeves = { wallet: 250 };
   const first = applyPrint(book, {
@@ -68,6 +69,19 @@ test("a buy is 8% of the remaining sleeve and skips under $5", () => {
   assert.equal(second.status, "buy");
   assert.ok(Math.abs(book.trades[1].usd - 18.4) < 1e-9);
 
+  const underFive = emptyBook();
+  const filled = applyPrint(underFive, {
+    id: "under-five",
+    ts: "2026-09-24T00:00:00Z",
+    traderId: "wallet",
+    side: "buy",
+    mint: "Mint111",
+    symbol: "AAA",
+    priceUsd: 1,
+  }, { wallet: 60 });
+  assert.equal(filled.status, "buy");
+  assert.ok(Math.abs(underFive.trades[0].usd - 4.8) < 1e-9);
+
   const tiny = emptyBook();
   const skipped = applyPrint(tiny, {
     id: "dust",
@@ -76,12 +90,12 @@ test("a buy is 8% of the remaining sleeve and skips under $5", () => {
     side: "buy",
     mint: "Mint111",
     symbol: "AAA",
-    usd: 9_000,
     priceUsd: 1,
-  }, { wallet: 60 });
+  }, { wallet: 10 });
   assert.equal(skipped.status, "small");
   assert.equal(tiny.cashUsd, 1_000);
   assert.equal(tiny.trades.length, 0);
+  assert.equal(tiny.ledger.at(-1).why, "Sleeve slice is under $1");
 });
 
 test("a DexScreener mark does not take profit or stop out", () => {
@@ -765,4 +779,58 @@ test("a partial leader exit sells that fraction, and a later full exit closes th
   assert.ok(Math.abs(rest.qty - openedQty * 0.6) < 1e-8);
   assert.ok(Math.abs(rest.realizedUsd - (rest.usd - openedCost * 0.6)) < 1e-6);
   assert.equal(book.lots["wallet|Mint111"], undefined);
+});
+
+test("idle sleeve cash moves onto the current board and a skipped buy can open", () => {
+  const book = emptyBook();
+  book.cashUsd = 350;
+  book.sleeveCash = { oldA: 200, oldB: 100, kept: 50 };
+  book.lots = { "oldA|MintOld": [{ qty: 10, costUsd: 40, entryUsd: 4, symbol: "OLD" }] };
+  book.trades = [{
+    id: "old-buy",
+    ts: "2026-09-24T00:00:00Z",
+    side: "buy",
+    traderId: "oldA",
+    mint: "MintOld",
+    symbol: "OLD",
+    qty: 10,
+    usd: 40,
+    priceUsd: 4,
+    realizedUsd: 0,
+  }];
+  book.ledger = [{
+    id: "skipped-buy",
+    ts: "2026-09-25T00:00:00Z",
+    side: "buy",
+    traderId: "new1",
+    symbol: "AAA",
+    why: "Sleeve slice is under $5",
+    outcome: "skipped",
+    usd: 0,
+    realizedUsd: 0,
+  }];
+  book.seen = { "skipped-buy": "small" };
+  const sleeves = { new1: 500, new2: 300, kept: 200 };
+  const result = applyPrints(book, [{
+    id: "skipped-buy",
+    ts: "2026-09-25T00:00:00Z",
+    side: "buy",
+    traderId: "new1",
+    mint: "Mint111",
+    symbol: "AAA",
+    priceUsd: 2,
+  }], sleeves);
+  assert.equal(result.counts.buy, 1);
+  assert.equal(book.lots["oldA|MintOld"][0].costUsd, 40);
+  assert.equal(book.lots["oldA|MintOld"][0].qty, 10);
+  assert.equal(book.sleeveCash.oldA, undefined);
+  assert.equal(book.sleeveCash.oldB, undefined);
+  assert.ok(Math.abs(book.sleeveCash.new1 - 138) < 1e-6);
+  assert.ok(Math.abs(book.sleeveCash.new2 - 90) < 1e-6);
+  assert.ok(Math.abs(book.sleeveCash.kept - 110) < 1e-6);
+  assert.equal(book.trades.filter((trade) => trade.id === "old-buy").length, 1);
+  assert.equal(book.ledger[0].outcome, "skipped");
+  assert.equal(book.ledger.at(-1).outcome, "opened");
+  assert.ok(Math.abs(book.cashUsd - 338) < 1e-6);
+  assert.equal(parkIdleSleeves(book, sleeves).oldA, undefined);
 });
