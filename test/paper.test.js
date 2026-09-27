@@ -17,6 +17,7 @@ import {
   snapshot,
   ensureSleeveCash,
   parkIdleSleeves,
+  collapseStackedCopies,
   sleeveEquity,
   positions,
   ensureWalletHistory,
@@ -844,7 +845,109 @@ test("a partial leader exit sells that fraction, and a later full exit closes th
   assert.equal(book.lots["wallet|Mint111"], undefined);
 });
 
-test("idle sleeve cash moves onto the current board and a skipped buy can open", () => {
+test("a second buy of a mint already held does not open another slice", () => {
+  const book = emptyBook();
+  const sleeves = { wallet: 500 };
+  const first = applyPrint(book, {
+    id: "buy-1",
+    ts: "2026-09-26T18:22:32.000Z",
+    traderId: "wallet",
+    side: "buy",
+    mint: "MintValley",
+    symbol: "VALLEY",
+    priceUsd: 0.00001,
+  }, sleeves);
+  assert.equal(first.status, "buy");
+  const usd = book.trades[0].usd;
+  assert.ok(Math.abs(usd - 40) < 1e-9);
+  const again = applyPrint(book, {
+    id: "buy-2",
+    ts: "2026-09-26T18:23:39.000Z",
+    traderId: "wallet",
+    side: "buy",
+    mint: "MintValley",
+    symbol: "VALLEY",
+    priceUsd: 0.000012,
+  }, sleeves);
+  assert.equal(again.status, "held");
+  assert.equal(book.lots["wallet|MintValley"].length, 1);
+  assert.ok(Math.abs(book.lots["wallet|MintValley"][0].costUsd - usd) < 1e-9);
+  assert.equal(book.trades.length, 1);
+  assert.equal(book.ledger.at(-1).why, "Already holding this mint");
+  assert.equal(book.cashUsd, 1_000 - usd);
+});
+
+test("stacked catch-up slices collapse to one lot and the extra cost returns to the sleeve", () => {
+  const book = emptyBook();
+  book.cashUsd = 1.42;
+  book.startingUsd = 1_000;
+  book.sleeveCash = { wallet: 0, other: 50 };
+  book.trades = [{
+    id: "old-stop",
+    ts: "2026-09-24T18:00:00Z",
+    side: "sell",
+    traderId: "other",
+    mint: "MintOld",
+    symbol: "BLUE",
+    qty: 1,
+    usd: 8,
+    priceUsd: 8,
+    realizedUsd: -2,
+    reason: "stop",
+  }];
+  book.ledger = [{
+    id: "old-stop",
+    ts: "2026-09-24T18:00:00Z",
+    traderId: "other",
+    mint: "MintOld",
+    symbol: "BLUE",
+    side: "sell",
+    why: "DexScreener mark is 15% below entry",
+    outcome: "closed",
+    realizedUsd: -2,
+    usd: 8,
+  }];
+  const slice = 34.43520990227558;
+  book.lots = {
+    "wallet|MintValley": [0, 1, 2, 3].map((n) => ({
+      qty: 1000 + n,
+      costUsd: slice,
+      entryUsd: 0.00001,
+      symbol: "VALLEY",
+    })),
+    "wallet|MintPump": [
+      { qty: 10, costUsd: slice, entryUsd: 0.00002, symbol: "PUMP" },
+      { qty: 11, costUsd: slice, entryUsd: 0.00002, symbol: "PUMP" },
+      { qty: 4, costUsd: 13.54591137553949, entryUsd: 0.00002, symbol: "PUMP" },
+    ],
+    "wallet|MintStonk": [
+      { qty: 10, costUsd: 36.32, entryUsd: 0.37, symbol: "STONK" },
+      { qty: 8, costUsd: 11.53, entryUsd: 0.32, symbol: "STONK" },
+    ],
+  };
+  collapseStackedCopies(book);
+  assert.equal(book.lots["wallet|MintValley"].length, 1);
+  assert.ok(Math.abs(book.lots["wallet|MintValley"][0].costUsd - slice) < 1e-9);
+  assert.equal(book.lots["wallet|MintPump"].length, 1);
+  assert.ok(Math.abs(book.lots["wallet|MintPump"][0].costUsd - slice) < 1e-9);
+  assert.equal(book.lots["wallet|MintStonk"].length, 2);
+  const refund = slice * 3 + slice + 13.54591137553949;
+  assert.ok(Math.abs(book.sleeveCash.wallet - refund) < 1e-6);
+  assert.equal(book.sleeveCash.other, 50);
+  assert.ok(Math.abs(book.cashUsd - (1.42 + refund)) < 1e-6);
+  assert.equal(book.startingUsd, 1_000);
+  assert.equal(book.trades.length, 1);
+  assert.equal(book.trades[0].id, "old-stop");
+  assert.equal(book.ledger[0].why, "DexScreener mark is 15% below entry");
+  const notes = book.ledger.filter((line) => line.outcome === "collapsed");
+  assert.equal(notes.length, 2);
+  assert.equal(notes[0].why, "Collapsed extra catch-up buys of this mint to one slice");
+  collapseStackedCopies(book);
+  assert.equal(book.ledger.filter((line) => line.outcome === "collapsed").length, 2);
+  assert.ok(Math.abs(book.sleeveCash.wallet - refund) < 1e-6);
+});
+
+test("idle sleeve cash moves onto the current board and a new mint can open", () => {
   const book = emptyBook();
   book.cashUsd = 350;
   book.sleeveCash = { oldA: 200, oldB: 100, kept: 50 };
@@ -882,8 +985,28 @@ test("idle sleeve cash moves onto the current board and a skipped buy can open",
     mint: "Mint111",
     symbol: "AAA",
     priceUsd: 2,
+  }, {
+    id: "fresh-buy",
+    ts: "2026-09-25T00:01:00Z",
+    side: "buy",
+    traderId: "new1",
+    mint: "Mint222",
+    symbol: "BBB",
+    priceUsd: 2,
+  }, {
+    id: "fresh-add",
+    ts: "2026-09-25T00:02:00Z",
+    side: "buy",
+    traderId: "new1",
+    mint: "Mint222",
+    symbol: "BBB",
+    priceUsd: 2,
   }], sleeves);
   assert.equal(result.counts.buy, 1);
+  assert.equal(result.counts.duplicate, 1);
+  assert.equal(result.counts.held, 1);
+  assert.equal(book.lots["new1|Mint111"], undefined);
+  assert.equal(book.lots["new1|Mint222"].length, 1);
   assert.equal(book.lots["oldA|MintOld"][0].costUsd, 40);
   assert.equal(book.lots["oldA|MintOld"][0].qty, 10);
   assert.equal(book.sleeveCash.oldA, undefined);
@@ -893,7 +1016,8 @@ test("idle sleeve cash moves onto the current board and a skipped buy can open",
   assert.ok(Math.abs(book.sleeveCash.kept - 110) < 1e-6);
   assert.equal(book.trades.filter((trade) => trade.id === "old-buy").length, 1);
   assert.equal(book.ledger[0].outcome, "skipped");
-  assert.equal(book.ledger.at(-1).outcome, "opened");
+  assert.equal(book.ledger.filter((line) => line.id === "skipped-buy").length, 1);
+  assert.equal(book.ledger.some((line) => line.id === "fresh-buy" && line.outcome === "opened"), true);
   assert.ok(Math.abs(book.trades.at(-1).usd - 40) < 1e-6);
   assert.ok(Math.abs(book.cashUsd - 310) < 1e-6);
   assert.equal(parkIdleSleeves(book, sleeves).oldA, undefined);

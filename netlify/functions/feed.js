@@ -18,4 +18,4 @@ export default async (req) => {
   }
 };
 
-export const config = { path: "/api/feed" };
+export const config = { path: "/api/feed", timeout: 26 };

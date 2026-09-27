@@ -350,15 +350,90 @@ export function parkIdleSleeves(book, sleeves) {
   return book.sleeveCash;
 }
 
-/** Let a followed wallet retry a buy that was skipped only because its sleeve was empty. */
-function releaseUndersizedBuys(book, sleeves) {
-  const active = new Set(Object.keys(sleeves || {}));
-  if (!book.seen || !active.size) return;
-  for (const line of book.ledger || []) {
-    if (line?.side === "sell" || line?.outcome !== "skipped") continue;
-    if (!active.has(line.traderId)) continue;
-    if (book.seen[line.id] === "small") delete book.seen[line.id];
+function sameSliceCost(a, b) {
+  const left = Number(a);
+  const right = Number(b);
+  if (!(left > 0) || !(right > 0)) return false;
+  return Math.abs(left - right) <= Math.max(0.01, left * 0.001);
+}
+
+function ledgerHas(book, id) {
+  return (book.ledger || []).some((line) => line?.id === id);
+}
+
+/** Drop repeated skip lines for the same print. Opens and closes stay, including the stop era. */
+function compactSkippedLedger(book) {
+  if (!Array.isArray(book.ledger) || book.ledger.length < 2) return;
+  const seen = new Set();
+  const next = [];
+  for (const line of book.ledger) {
+    if (line?.outcome === "skipped" && line.id) {
+      if (seen.has(line.id)) continue;
+      seen.add(line.id);
+    }
+    next.push(line);
   }
+  if (next.length === book.ledger.length) return;
+  book.ledger = next;
+  book.history = {};
+  for (const line of book.ledger) rememberHistory(book, line);
+}
+
+/**
+ * A catch-up that buys the same mint several times at a full sleeve slice is one copy.
+ * Keep the first slice, return the extra cost to that sleeve, and leave the old ledger in place.
+ */
+export function collapseStackedCopies(book) {
+  if (!book.sleeveCash) book.sleeveCash = {};
+  for (const [key, raw] of Object.entries(book.lots || {})) {
+    const lots = positiveLots(raw);
+    if (lots.length < 2) continue;
+    let slice = 0;
+    let repeats = 0;
+    for (const lot of lots) {
+      const cost = Number(lot.costUsd);
+      if (!(cost >= 10)) continue;
+      const count = lots.filter((item) => sameSliceCost(item.costUsd, cost)).length;
+      if (count > repeats) {
+        repeats = count;
+        slice = cost;
+      }
+    }
+    if (repeats < 2) continue;
+    const first = lots.findIndex((lot) => sameSliceCost(lot.costUsd, slice));
+    if (first < 0) continue;
+    const extra = [];
+    for (let i = first + 1; i < lots.length; i += 1) {
+      const cost = Number(lots[i].costUsd);
+      if (sameSliceCost(cost, slice) || cost < slice) extra.push(lots[i]);
+    }
+    if (!extra.length) continue;
+    const refund = extra.reduce((sum, lot) => sum + Number(lot.costUsd), 0);
+    if (!(refund > 0)) continue;
+    const [traderId, mint] = key.split("|");
+    const kept = lots[first];
+    book.lots[key] = lots.filter((lot) => !extra.includes(lot));
+    book.cashUsd += refund;
+    book.sleeveCash[traderId] = Math.max(0, (Number(book.sleeveCash[traderId]) || 0) + refund);
+    const id = `collapse:${key}`;
+    if (ledgerHas(book, id)) continue;
+    pushLedger(book, {
+      id,
+      ts: new Date().toISOString(),
+      traderId,
+      traderName: "",
+      mint,
+      symbol: kept.symbol || mint.slice(0, 4),
+      side: "buy",
+      why: "Collapsed extra catch-up buys of this mint to one slice",
+      entryUsd: Number(kept.entryUsd) || null,
+      exitUsd: null,
+      outcome: "collapsed",
+      realizedUsd: 0,
+      usd: refund,
+    });
+  }
+  return book;
 }
 
 export function sleeveEquity(book, traderId, marks) {
@@ -420,6 +495,28 @@ export function applyPrint(book, print, sleeves) {
   }
 
   if (print.side !== "sell") {
+    const held = positiveLots(book.lots[key]);
+    if (held.length) {
+      book.seen[id] = "held";
+      if (!ledgerHas(book, id)) {
+        pushLedger(book, {
+          id,
+          ts: eventStamp(print),
+          traderId: print.traderId,
+          traderName: print.traderName,
+          mint: print.mint,
+          symbol: print.symbol,
+          side: "buy",
+          why: "Already holding this mint",
+          entryUsd: null,
+          exitUsd: null,
+          outcome: "skipped",
+          realizedUsd: 0,
+          usd: 0,
+        });
+      }
+      return { book, status: "held" };
+    }
     ensureSleeveCash(book, sleeves);
     const allocation = Math.max(0, Number(sleeves?.[print.traderId]) || 0);
     const remaining = Math.max(0, Number(book.sleeveCash?.[print.traderId]) || 0);
@@ -428,21 +525,23 @@ export function applyPrint(book, print, sleeves) {
     const buyUsd = Math.min(slice, cash, remaining);
     if (!(buyUsd >= MIN_BUY_USD) || book.cashUsd - buyUsd < -1e-9) {
       book.seen[id] = "small";
-      pushLedger(book, {
-        id,
-        ts: eventStamp(print),
-        traderId: print.traderId,
-        traderName: print.traderName,
-        mint: print.mint,
-        symbol: print.symbol,
-        side: "buy",
-        why: slice < MIN_BUY_USD || remaining < MIN_BUY_USD ? `Sleeve slice is under $${MIN_BUY_USD}` : "Sleeve is spent or cash is short",
-        entryUsd: null,
-        exitUsd: null,
-        outcome: "skipped",
-        realizedUsd: 0,
-        usd: 0,
-      });
+      if (!ledgerHas(book, id)) {
+        pushLedger(book, {
+          id,
+          ts: eventStamp(print),
+          traderId: print.traderId,
+          traderName: print.traderName,
+          mint: print.mint,
+          symbol: print.symbol,
+          side: "buy",
+          why: slice < MIN_BUY_USD || remaining < MIN_BUY_USD ? `Sleeve slice is under $${MIN_BUY_USD}` : "Sleeve is spent or cash is short",
+          entryUsd: null,
+          exitUsd: null,
+          outcome: "skipped",
+          realizedUsd: 0,
+          usd: 0,
+        });
+      }
       return { book, status: "small" };
     }
     const qty = buyUsd / price;
@@ -559,8 +658,9 @@ export function applyPrint(book, print, sleeves) {
 
 export function applyPrints(book, prints, sleeves) {
   ensureSleeveCash(book, sleeves);
+  compactSkippedLedger(book);
   parkIdleSleeves(book, sleeves);
-  releaseUndersizedBuys(book, sleeves);
+  collapseStackedCopies(book);
   const ordered = [...prints].sort((a, b) => String(a.ts).localeCompare(String(b.ts)) || String(a.id).localeCompare(String(b.id)));
   const counts = { buy: 0, sell: 0, small: 0, duplicate: 0, flat: 0, skip: 0 };
   for (const print of ordered) {
