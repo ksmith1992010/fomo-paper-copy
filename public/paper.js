@@ -1,5 +1,7 @@
 export const BOOK_VERSION = 4;
 export const STARTING_CASH = 1_000;
+/** Books saved before this id are replaced with a fresh $1,000. A book that already has it is kept. */
+export const FRESH_BOOK = "2026-09-27-fresh-1000";
 /** Disarmed. There is no setter and no order route. A later arm would be a sandbox account, never a main wallet. */
 export const LIVE_MODE = false;
 
@@ -20,6 +22,7 @@ export const MIN_BUY_USD = 1;
 export function emptyBook() {
   return {
     bookVersion: BOOK_VERSION,
+    freshBook: FRESH_BOOK,
     cashUsd: STARTING_CASH,
     startingUsd: STARTING_CASH,
     lots: {},
@@ -678,6 +681,7 @@ export function closeOnMarks() {
 
 function copyBook(book, next) {
   book.bookVersion = next.bookVersion;
+  book.freshBook = next.freshBook || FRESH_BOOK;
   book.cashUsd = next.cashUsd;
   book.startingUsd = next.startingUsd;
   book.lots = next.lots;
@@ -726,6 +730,7 @@ export function resetBook(book) {
 }
 
 export function sanitizeBook(saved) {
+  if (saved && saved.freshBook !== FRESH_BOOK) return emptyBook();
   if (!saved || bookNeedsReset(saved)) {
     if (saved && Array.isArray(saved.trades) && saved.trades.length >= 100) return saved;
     return emptyBook();

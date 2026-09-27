@@ -11,6 +11,7 @@ import {
   bookNeedsReset,
   closeOnMarks,
   emptyBook,
+  FRESH_BOOK,
   liveStatus,
   sanitizeBook,
   sleeveSizes,
@@ -402,6 +403,64 @@ test("a quote over 100× entry is ignored for unrealized P&L and equity", () => 
   assert.equal(dust.positions[0].unrealizedUsd, null);
   assert.ok(Math.abs(dust.positions[0].valueUsd - cost) < 1e-9);
   assert.equal(book.cashUsd, cash);
+});
+
+test("a book from before the fresh start is replaced with $1,000 even if it is large", () => {
+  const old = emptyBook();
+  delete old.freshBook;
+  old.cashUsd = 151.97;
+  old.startingUsd = 1_000;
+  old.lots = { "ada|MintOld": [{ qty: 10, costUsd: 172, entryUsd: 1, symbol: "STONK" }] };
+  old.seen = { "old-buy": "buy" };
+  old.exitCopied = { "ada|pos": 1 };
+  old.sleeveCash = { ada: 151 };
+  old.ledger = [{
+    id: "old-stop",
+    outcome: "closed",
+    why: "DexScreener mark is 15% below entry",
+    realizedUsd: -2,
+  }];
+  old.trades = Array.from({ length: 120 }, (_, index) => ({
+    id: `old-${index}`,
+    ts: "2026-09-24T00:00:00Z",
+    side: "buy",
+    traderId: "ada",
+    mint: "MintOld",
+    symbol: "STONK",
+    qty: 1,
+    usd: 1,
+    priceUsd: 1,
+    realizedUsd: 0,
+  }));
+  const next = sanitizeBook(old);
+  assert.equal(next.freshBook, FRESH_BOOK);
+  assert.equal(next.cashUsd, 1_000);
+  assert.equal(next.startingUsd, 1_000);
+  assert.equal(next.trades.length, 0);
+  assert.deepEqual(next.lots, {});
+  assert.deepEqual(next.ledger, []);
+  assert.deepEqual(next.seen, {});
+  assert.deepEqual(next.exitCopied, {});
+  assert.equal(next.sleeveCash, null);
+  assert.equal(next.bookVersion, 4);
+  next.cashUsd = 960;
+  next.lots = { "ada|MintNew": [{ qty: 2, costUsd: 40, entryUsd: 20, symbol: "NEW" }] };
+  next.trades = [{
+    id: "new-buy",
+    ts: "2026-09-27T16:00:00Z",
+    side: "buy",
+    traderId: "ada",
+    mint: "MintNew",
+    symbol: "NEW",
+    qty: 2,
+    usd: 40,
+    priceUsd: 20,
+    realizedUsd: 0,
+  }];
+  const kept = sanitizeBook(next);
+  assert.equal(kept.cashUsd, 960);
+  assert.equal(kept.trades.length, 1);
+  assert.equal(kept.lots["ada|MintNew"][0].symbol, "NEW");
 });
 
 test("a book saved before the mark fix resets to $1,000 and no positions", () => {
