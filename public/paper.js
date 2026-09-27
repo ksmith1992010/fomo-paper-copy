@@ -626,7 +626,10 @@ export function resetBook(book) {
 }
 
 export function sanitizeBook(saved) {
-  if (!saved || bookNeedsReset(saved)) return emptyBook();
+  if (!saved || bookNeedsReset(saved)) {
+    if (saved && Array.isArray(saved.trades) && saved.trades.length >= 100) return saved;
+    return emptyBook();
+  }
   if (!Array.isArray(saved.ledger)) saved.ledger = (saved.trades || []).map(ledgerFromTrade);
   ensureWalletHistory(saved);
   return saved;
