@@ -40,7 +40,7 @@ test("a lopsided board still respects the floor and the cap", () => {
   assert.ok(Math.abs(sizes.reduce((total, size) => total + size, 0) - 1_000) < 1e-6);
 });
 
-test("a buy is 8% of the remaining sleeve and skips under $1", () => {
+test("a buy is 8% of the sleeve allocation and skips under $1", () => {
   const book = emptyBook();
   const sleeves = { wallet: 250 };
   const first = applyPrint(book, {
@@ -61,13 +61,27 @@ test("a buy is 8% of the remaining sleeve and skips under $1", () => {
     ts: "2026-09-24T00:01:00Z",
     traderId: "wallet",
     side: "buy",
-    mint: "Mint111",
-    symbol: "AAA",
+    mint: "Mint222",
+    symbol: "BBB",
     usd: 80_000,
     priceUsd: 2,
   }, sleeves);
   assert.equal(second.status, "buy");
-  assert.ok(Math.abs(book.trades[1].usd - 18.4) < 1e-9);
+  assert.ok(Math.abs(book.trades[1].usd - 20) < 1e-9);
+
+  const third = applyPrint(book, {
+    id: "buy-3",
+    ts: "2026-09-24T00:02:00Z",
+    traderId: "wallet",
+    side: "buy",
+    mint: "Mint333",
+    symbol: "CCC",
+    usd: 90_000,
+    priceUsd: 2,
+  }, sleeves);
+  assert.equal(third.status, "buy");
+  assert.ok(Math.abs(book.trades[2].usd - 20) < 1e-9);
+  assert.ok(Math.abs(book.sleeveCash.wallet - 190) < 1e-9);
 
   const underFive = emptyBook();
   const filled = applyPrint(underFive, {
@@ -391,7 +405,7 @@ test("each copy is one ledger line and a skipped sell adds nothing", () => {
     priceUsd: 10,
   }, sleeves);
   assert.equal(book.ledger.length, 1);
-  assert.equal(book.ledger[0].why, "8% of the sleeve still unused");
+  assert.equal(book.ledger[0].why, "8% of the sleeve allocation");
   assert.equal(book.ledger[0].entryUsd, 10);
   assert.equal(book.ledger[0].exitUsd, null);
   assert.equal(book.ledger[0].outcome, "opened");
@@ -484,7 +498,7 @@ test("a closed lot's P&L stays on the sleeve that opened it", () => {
     priceUsd: 1,
   }, sleeves);
   assert.equal(next.status, "buy");
-  assert.ok(Math.abs(book.trades.at(-1).usd - 41.6) < 1e-9);
+  assert.ok(Math.abs(book.trades.at(-1).usd - 40) < 1e-9);
 
   applyPrint(book, {
     id: "b-sell",
@@ -496,7 +510,7 @@ test("a closed lot's P&L stays on the sleeve that opened it", () => {
     priceUsd: 1,
   }, sleeves);
   assert.ok(Math.abs(book.sleeveCash.b - 480) < 1e-9);
-  assert.ok(Math.abs(book.sleeveCash.a - 478.4) < 1e-9);
+  assert.ok(Math.abs(book.sleeveCash.a - 480) < 1e-9);
   assert.ok(book.sleeveCash.a >= 0 && book.sleeveCash.b >= 0);
 });
 
@@ -517,7 +531,7 @@ test("a sleeve cannot go below zero or spend another sleeve's cash", () => {
   assert.equal(closed.status, "sell");
   assert.ok(Math.abs(book.sleeveCash.a - 10) < 1e-9);
   assert.ok(Math.abs(book.sleeveCash.b - 80) < 1e-9);
-  const blocked = applyPrint(book, {
+  const capped = applyPrint(book, {
     id: "buy-a",
     ts: "2026-09-24T00:01:00Z",
     traderId: "a",
@@ -526,9 +540,23 @@ test("a sleeve cannot go below zero or spend another sleeve's cash", () => {
     symbol: "CCC",
     priceUsd: 1,
   }, { a: 500, b: 500 });
+  assert.equal(capped.status, "buy");
+  assert.ok(Math.abs(book.trades.at(-1).usd - 10) < 1e-9);
+  assert.ok(Math.abs(book.sleeveCash.a) < 1e-9);
+  assert.ok(Math.abs(book.sleeveCash.b - 80) < 1e-9);
+  assert.equal(book.cashUsd, 80);
+  const blocked = applyPrint(book, {
+    id: "buy-a-2",
+    ts: "2026-09-24T00:02:00Z",
+    traderId: "a",
+    side: "buy",
+    mint: "MintD",
+    symbol: "DDD",
+    priceUsd: 1,
+  }, { a: 500, b: 500 });
   assert.equal(blocked.status, "small");
   assert.ok(Math.abs(book.sleeveCash.b - 80) < 1e-9);
-  assert.equal(book.cashUsd, 90);
+  assert.equal(book.cashUsd, 80);
 });
 
 test("seeding sleeve cash keeps open lots and does not reset the book", () => {
@@ -825,12 +853,13 @@ test("idle sleeve cash moves onto the current board and a skipped buy can open",
   assert.equal(book.lots["oldA|MintOld"][0].qty, 10);
   assert.equal(book.sleeveCash.oldA, undefined);
   assert.equal(book.sleeveCash.oldB, undefined);
-  assert.ok(Math.abs(book.sleeveCash.new1 - 138) < 1e-6);
+  assert.ok(Math.abs(book.sleeveCash.new1 - 110) < 1e-6);
   assert.ok(Math.abs(book.sleeveCash.new2 - 90) < 1e-6);
   assert.ok(Math.abs(book.sleeveCash.kept - 110) < 1e-6);
   assert.equal(book.trades.filter((trade) => trade.id === "old-buy").length, 1);
   assert.equal(book.ledger[0].outcome, "skipped");
   assert.equal(book.ledger.at(-1).outcome, "opened");
-  assert.ok(Math.abs(book.cashUsd - 338) < 1e-6);
+  assert.ok(Math.abs(book.trades.at(-1).usd - 40) < 1e-6);
+  assert.ok(Math.abs(book.cashUsd - 310) < 1e-6);
   assert.equal(parkIdleSleeves(book, sleeves).oldA, undefined);
 });

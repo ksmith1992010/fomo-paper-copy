@@ -3,7 +3,7 @@ import test from "node:test";
 import { isSolanaAddress, snapshotBanner, snapshotFromBoard } from "../lib/board-snapshot.js";
 import { loadFeed, printsFromTrades } from "../lib/feed.js";
 import { LIVE_MODE } from "../lib/paper.js";
-import { swapFromTransaction } from "../lib/solana-swaps.js";
+import { recentSwaps, swapFromTransaction } from "../lib/solana-swaps.js";
 
 const WALLET = "Ggb7o1osAQjv4PrAaFzF9UKRW9qYkfCtSZs56BgcAffa";
 const MINT = "MintMintMintMintMintMintMintMintMintMintMint";
@@ -100,6 +100,61 @@ test("a public swap is a buy or sell only when a token balance changes", () => {
   }, WALLET, 100);
   assert.equal(exited.side, "sell");
   assert.equal(exited.exitFraction, 1);
+
+  const WSOL = "So11111111111111111111111111111111111111112";
+  const relayed = swapFromTransaction({
+    meta: {
+      fee: 105000,
+      preBalances: [2_000_000_000],
+      postBalances: [1_999_895_000],
+      logMessages: ["Program log: SwapEvent { dex: PumpfunammBuy2, amount_in: 1000000, amount_out: 2106978290 }"],
+      preTokenBalances: [],
+      postTokenBalances: [{
+        owner: WALLET,
+        mint: MINT,
+        uiTokenAmount: { amount: "2106978290", decimals: 6, uiAmountString: "2106.97829" },
+      }],
+      innerInstructions: [{
+        instructions: [{
+          parsed: {
+            type: "transferChecked",
+            info: { mint: WSOL, tokenAmount: { amount: "1000000", decimals: 9, uiAmountString: "0.001" } },
+          },
+        }],
+      }],
+    },
+    transaction: { message: { accountKeys: [{ pubkey: "relayer" }] } },
+  }, WALLET, 200);
+  assert.equal(relayed.side, "buy");
+  assert.ok(Math.abs(relayed.usd - 0.2) < 1e-9);
+  assert.equal(relayed.mint, MINT);
+
+  const relayedSell = swapFromTransaction({
+    meta: {
+      fee: 5000,
+      preBalances: [1_000_000_000],
+      postBalances: [999_995_000],
+      logMessages: ["Program log: SwapEvent { dex: PumpfunammSell, amount_in: 5000000, amount_out: 2000000 }"],
+      preTokenBalances: [{
+        owner: WALLET,
+        mint: MINT,
+        uiTokenAmount: { amount: "5000000", decimals: 6, uiAmountString: "5" },
+      }],
+      postTokenBalances: [],
+      innerInstructions: [{
+        instructions: [{
+          parsed: {
+            type: "transferChecked",
+            info: { mint: USDC, tokenAmount: { amount: "2000000", decimals: 6, uiAmountString: "2" } },
+          },
+        }],
+      }],
+    },
+    transaction: { message: { accountKeys: [{ pubkey: "relayer" }] } },
+  }, WALLET, 200);
+  assert.equal(relayedSell.side, "sell");
+  assert.equal(relayedSell.exitFraction, 1);
+  assert.ok(Math.abs(relayedSell.usd - 2) < 1e-9);
 });
 
 test("a FOMO sell copies the fraction sold, and a closed position is a full exit", () => {
@@ -206,5 +261,96 @@ test("a 402 follows the saved wallet from public swaps", async () => {
   assert.equal(feed.traders[0].prints[0].traderId, USER);
   assert.equal(urls.some((url) => url.includes("fomo.family")), false);
   assert.equal(urls.some((url) => url.includes("/trades")), false);
+  assert.equal(feed.live.armed, false);
+});
+
+test("an empty first page does not hide a later swap, and versioned transactions are requested", async () => {
+  const tx = {
+    meta: {
+      fee: 5000,
+      preBalances: [2_000_000_000],
+      postBalances: [1_000_005_000],
+      preTokenBalances: [],
+      postTokenBalances: [{ owner: WALLET, mint: MINT, uiTokenAmount: { uiAmountString: "10" } }],
+    },
+    transaction: { message: { accountKeys: [{ pubkey: WALLET }] } },
+  };
+  const versions = [];
+  const prints = await recentSwaps(WALLET, {
+    solUsd: 100,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.method === "getSignaturesForAddress") {
+        assert.equal(body.params[1].limit, 25);
+        if (!body.params[1].before) {
+          return Response.json({
+            result: Array.from({ length: 25 }, (_, index) => ({ signature: `empty-${index}`, blockTime: 100 - index, err: null })),
+          });
+        }
+        return Response.json({ result: [{ signature: "sigswap", blockTime: 1, err: null }] });
+      }
+      versions.push(body.params[1]?.maxSupportedTransactionVersion);
+      if (body.params[0] === "sigswap") return Response.json({ result: tx });
+      return Response.json({
+        result: {
+          meta: { fee: 1, preBalances: [], postBalances: [], preTokenBalances: [], postTokenBalances: [] },
+          transaction: { message: { accountKeys: [] } },
+        },
+      });
+    },
+  });
+  assert.equal(prints.length, 1);
+  assert.equal(prints[0].side, "buy");
+  assert.ok(versions.every((version) => version === 1));
+});
+
+test("a wallet whose Solana request fails does not drop another board wallet", async () => {
+  const fast = "FastWa11et1111111111111111111111111111111111";
+  const slow = "SlowWa11et1111111111111111111111111111111111";
+  const tx = {
+    meta: {
+      fee: 5000,
+      preBalances: [2_000_000_000],
+      postBalances: [1_000_005_000],
+      preTokenBalances: [],
+      postTokenBalances: [{ owner: fast, mint: MINT, uiTokenAmount: { uiAmountString: "10" } }],
+    },
+    transaction: { message: { accountKeys: [{ pubkey: fast }] } },
+  };
+  const snapshot = {
+    savedAt: "2026-09-24T00:00:00.000Z",
+    traders: [
+      { rank: 1, handle: "ninety", userId: "fast-user", wallet: fast, pnlUsd: 10 },
+      { rank: 2, handle: "DumbCrayonEater", userId: "slow-user", wallet: slow, pnlUsd: 9 },
+    ],
+  };
+  const feed = await loadFeed({
+    fresh: true,
+    fomoKey: "test-key",
+    readSnapshot: async () => snapshot,
+    writeSnapshot: async () => {},
+    fetchImpl: async (url, init) => {
+      if (String(url).includes("leaderboard")) {
+        return new Response(JSON.stringify({ error: "credits_exhausted" }), { status: 402 });
+      }
+      if (String(url).includes("dexscreener.com") && String(url).includes("So111")) {
+        return Response.json({ pairs: [{ baseToken: { address: "So11111111111111111111111111111111111111112", symbol: "SOL" }, priceUsd: "100", liquidity: { usd: 1000 } }] });
+      }
+      if (String(url).includes("dexscreener.com")) {
+        return Response.json({ pairs: [{ baseToken: { address: MINT, symbol: "AAA" }, priceUsd: "11", liquidity: { usd: 1000 } }] });
+      }
+      const body = JSON.parse(init.body);
+      if (JSON.stringify(body).includes(slow)) return new Response("slow", { status: 503 });
+      if (body.method === "getSignaturesForAddress") {
+        return Response.json({ result: [{ signature: "sig-fast", blockTime: 1_700_000_000, err: null }] });
+      }
+      if (body.method === "getTransaction") return Response.json({ result: tx });
+      return new Response("missing", { status: 404 });
+    },
+  });
+  assert.equal(feed.traders.length, 2);
+  assert.equal(feed.traders[0].prints.length, 1);
+  assert.equal(feed.traders[0].prints[0].side, "buy");
+  assert.equal(feed.traders[1].prints.length, 0);
   assert.equal(feed.live.armed, false);
 });

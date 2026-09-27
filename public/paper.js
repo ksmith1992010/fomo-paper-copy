@@ -385,7 +385,7 @@ function ledgerFromTrade(trade) {
     mint: trade.mint,
     symbol: trade.symbol,
     side: trade.side,
-    why: sell ? whyFor(trade.reason || "sell") : "8% of the sleeve still unused",
+    why: sell ? whyFor(trade.reason || "sell") : "8% of the sleeve allocation",
     entryUsd: sell ? (Number(trade.entryUsd) > 0 ? Number(trade.entryUsd) : null) : Number(trade.priceUsd) || null,
     exitUsd: sell ? Number(trade.priceUsd) || null : null,
     outcome: sell ? "closed" : "opened",
@@ -421,8 +421,9 @@ export function applyPrint(book, print, sleeves) {
 
   if (print.side !== "sell") {
     ensureSleeveCash(book, sleeves);
+    const allocation = Math.max(0, Number(sleeves?.[print.traderId]) || 0);
     const remaining = Math.max(0, Number(book.sleeveCash?.[print.traderId]) || 0);
-    const slice = remaining * BUY_FRACTION;
+    const slice = allocation * BUY_FRACTION;
     const cash = Math.max(0, book.cashUsd);
     const buyUsd = Math.min(slice, cash, remaining);
     if (!(buyUsd >= MIN_BUY_USD) || book.cashUsd - buyUsd < -1e-9) {
@@ -472,7 +473,7 @@ export function applyPrint(book, print, sleeves) {
       mint: print.mint,
       symbol: print.symbol,
       side: "buy",
-      why: "8% of the sleeve still unused",
+      why: "8% of the sleeve allocation",
       entryUsd: price,
       exitUsd: null,
       outcome: "opened",
