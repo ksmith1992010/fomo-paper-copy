@@ -635,7 +635,32 @@ export function sanitizeBook(saved) {
   return saved;
 }
 
+/**
+ * Quotes that may mark an open lot. The same band as a close: over 100× entry
+ * or under 1/100 is dropped. Nothing is written in its place.
+ */
+export function guardedMarks(book, marks) {
+  const next = { ...(marks || {}) };
+  const entries = {};
+  for (const [key, lots] of Object.entries(book?.lots || {})) {
+    const mint = key.split("|")[1];
+    const held = positiveLots(lots);
+    const qty = held.reduce((sum, lot) => sum + Number(lot.qty), 0);
+    const cost = held.reduce((sum, lot) => sum + Number(lot.costUsd), 0);
+    if (!mint || !(qty > 0) || !(cost > 0)) continue;
+    if (!entries[mint]) entries[mint] = [];
+    entries[mint].push(cost / qty);
+  }
+  for (const [mint, bases] of Object.entries(entries)) {
+    const quoted = Number(next[mint]);
+    if (!(quoted > 0)) continue;
+    if (!bases.some((entry) => exitPrice(quoted, entry) != null)) delete next[mint];
+  }
+  return next;
+}
+
 export function positions(book, marks) {
+  const usable = guardedMarks(book, marks);
   const rows = [];
   for (const [key, lots] of Object.entries(book.lots)) {
     const [traderId, mint] = key.split("|");
@@ -643,7 +668,7 @@ export function positions(book, marks) {
     const costUsd = lots.reduce((sum, lot) => sum + lot.costUsd, 0);
     if (qty <= 1e-10) continue;
     const entry = costUsd / qty;
-    const quoted = Number(marks?.[mint]);
+    const quoted = Number(usable?.[mint]);
     const mark = quoted > 0 ? exitPrice(quoted, entry) : null;
     const unrealizedUsd = mark == null ? null : lots.reduce((sum, lot) => {
       const lotEntry = Number(lot.entryUsd) > 0 ? Number(lot.entryUsd) : entry;

@@ -4,6 +4,8 @@ import {
   LIVE_MODE,
   STARTING_CASH,
   alignUsdPrice,
+  exitPrice,
+  guardedMarks,
   applyPrint,
   applyPrints,
   bookNeedsReset,
@@ -365,6 +367,39 @@ test("a decimal-shifted mark does not invent P&L, and a real move does", () => {
   const ten = closeOnMarks(book, { Mint111: entry * 10 }, "2026-09-24T00:03:00Z");
   assert.equal(ten.length, 0);
   assert.ok(Math.abs(book.lots["wallet|Mint111"][0].qty - qty) < 1e-8);
+  assert.equal(book.cashUsd, cash);
+});
+
+test("a quote over 100× entry is ignored for unrealized P&L and equity", () => {
+  const book = emptyBook();
+  const entry = 0.000453069;
+  const qty = 4419.018677625677;
+  const cost = 2.002120373253188;
+  book.cashUsd = 998;
+  book.lots["natan|MintAI"] = [{ qty, symbol: "AI", costUsd: cost, entryUsd: entry }];
+  const quote = entry * 541;
+  const cash = book.cashUsd;
+  const view = snapshot(book, { MintAI: quote });
+  const row = view.positions.find((item) => item.symbol === "AI");
+  assert.equal(exitPrice(quote, entry), null);
+  assert.equal(guardedMarks(book, { MintAI: quote }).MintAI, undefined);
+  assert.equal(row.markUsd, null);
+  assert.equal(row.unrealizedUsd, null);
+  assert.ok(Math.abs(row.valueUsd - cost) < 1e-9);
+  assert.ok(Math.abs(view.equityUsd - (cash + cost)) < 1e-6);
+  assert.equal(view.positions.length, 1);
+  assert.equal(closeOnMarks(book, { MintAI: quote }, "2026-09-27T00:00:00Z").length, 0);
+  assert.equal(book.cashUsd, cash);
+  assert.equal(book.lots["natan|MintAI"][0].qty, qty);
+
+  const kept = snapshot(book, { MintAI: entry * 10 });
+  assert.ok(Math.abs(kept.positions[0].markUsd - entry * 10) < 1e-12);
+  assert.ok(kept.positions[0].unrealizedUsd > 0);
+
+  const dust = snapshot(book, { MintAI: entry / 200 });
+  assert.equal(dust.positions[0].markUsd, null);
+  assert.equal(dust.positions[0].unrealizedUsd, null);
+  assert.ok(Math.abs(dust.positions[0].valueUsd - cost) < 1e-9);
   assert.equal(book.cashUsd, cash);
 });
 

@@ -68,3 +68,24 @@ test("an open lot is marked from DexScreener on the same feed", async () => {
   assert.equal(row.markUsd, 2.1);
   assert.ok(Math.abs(row.unrealizedUsd - (2.1 - 2) * row.qty) < 1e-9);
 });
+
+test("a Dex quote over 100× entry is left off the book mark", async () => {
+  const store = memoryBookStore();
+  const opened = await settleFeed(feed, { store });
+  const before = opened.book.trades.length;
+  const cash = opened.book.cashUsd;
+  const entry = opened.book.lots["ada|MintA"][0].entryUsd;
+  const wild = await settleFeed({
+    ...feed,
+    dexMarks: { MintA: entry * 541 },
+    traders: [{ id: "ada", sleeveUsd: 1000, prints: [] }],
+  }, { store });
+  assert.equal(wild.dexMarks.MintA, undefined);
+  assert.equal(wild.book.trades.length, before);
+  assert.equal(wild.book.cashUsd, cash);
+  assert.ok(wild.book.lots["ada|MintA"][0].qty > 0);
+  const row = snapshot(wild.book, wild.dexMarks).positions.find((item) => item.mint === "MintA");
+  assert.equal(row.markUsd, null);
+  assert.equal(row.unrealizedUsd, null);
+  assert.ok(Math.abs(row.valueUsd - wild.book.lots["ada|MintA"][0].costUsd) < 1e-9);
+});
